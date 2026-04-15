@@ -1,3 +1,4 @@
+# mnesh - magical autocomplete (WIP)
 
 ## useful resources
 
