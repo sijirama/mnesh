@@ -1,0 +1,4 @@
+sentencepiece
+datasets
+huggingface_hub
+tqdm
