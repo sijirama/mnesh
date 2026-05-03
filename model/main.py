@@ -1,7 +1,17 @@
 import torch
 import torch.nn as nn
 
-from model.dataset import MneshDatasetV1  # MneshDatasetV1
+# config — all hyperparameters in one place
+CFG = {
+    "vocab_size":       18000,
+    "token_emb_dim":    128,
+    "context_emb_dim":  16,
+    "inner_hidden":     256,
+    "outer_hidden":     512,
+    "window_size":      10,
+    "max_cmd_len":      32,
+    "context_dim":      16 * 5,  # 80
+}
 
 OS_CLASSES          = 2
 SHELL_CLASSES       = 3
@@ -10,39 +20,110 @@ CMD_TYPE_CLASSES    = 13
 GIT_CLASSES         = 2
 
 class MneshEmbedding(nn.Module):
-    def __init__(self, vocab_size, token_emb_dim, context_emb_dim):
+    def __init__(self, cfg):
         super().__init__()
-        self.tok_emb     = nn.Embedding(vocab_size, token_emb_dim)
-        self.os_emb      = nn.Embedding(OS_CLASSES, context_emb_dim)
-        self.shell_emb   = nn.Embedding(SHELL_CLASSES, context_emb_dim)
-        self.ctx_emb     = nn.Embedding(SESSION_CTX_CLASSES, context_emb_dim)
-        self.cmd_emb     = nn.Embedding(CMD_TYPE_CLASSES, context_emb_dim)
-        self.git_emb     = nn.Embedding(GIT_CLASSES, context_emb_dim)
+        self.tok_emb   = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"])
+        self.os_emb    = nn.Embedding(OS_CLASSES, cfg["context_emb_dim"])
+        self.shell_emb = nn.Embedding(SHELL_CLASSES, cfg["context_emb_dim"])
+        self.ctx_emb   = nn.Embedding(SESSION_CTX_CLASSES, cfg["context_emb_dim"])
+        self.cmd_emb   = nn.Embedding(CMD_TYPE_CLASSES, cfg["context_emb_dim"])
+        self.git_emb   = nn.Embedding(GIT_CLASSES, cfg["context_emb_dim"])
 
     def forward(self, token_ids, context):
-
-        tok = self.tok_emb(token_ids)          # (batch, window_size(10), max_cmd_len(32), token_emb_dim)
-
-        # context embeddings - each column of context is one feature
-        os_e   = self.os_emb(context[:, 0])    # (batch, context_emb_dim)
-        sh_e   = self.shell_emb(context[:, 1]) # (batch, context_emb_dim)
-        ctx_e  = self.ctx_emb(context[:, 2])   # (batch, context_emb_dim)
-        cmd_e  = self.cmd_emb(context[:, 3])   # (batch, context_emb_dim)
-        git_e  = self.git_emb(context[:, 4])   # (batch, context_emb_dim)
-
-        # concatenate all context embeddings into one vector
-        ctx_vec = torch.cat([os_e, sh_e, ctx_e, cmd_e, git_e], dim=-1)  # (batch, 5 * context_emb_dim (80ish))
-
+        tok   = self.tok_emb(token_ids)
+        os_e  = self.os_emb(context[:, 0])
+        sh_e  = self.shell_emb(context[:, 1])
+        ctx_e = self.ctx_emb(context[:, 2])
+        cmd_e = self.cmd_emb(context[:, 3])
+        git_e = self.git_emb(context[:, 4])
+        ctx_vec = torch.cat([os_e, sh_e, ctx_e, cmd_e, git_e], dim=-1)
         return tok, ctx_vec
 
+
 class MneshInnerGRU(nn.Module):
-    def __init__(self, input_size,  hidden_size, batch_first=True):
+    def __init__(self, cfg):
         super().__init__()
+        self.hidden_size = cfg["inner_hidden"]
+        self.window_size = cfg["window_size"]
+        self.max_cmd_len = cfg["max_cmd_len"]
+        self.rnn = nn.GRU(cfg["token_emb_dim"], cfg["inner_hidden"], batch_first=True)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        x = x.view(batch_size * self.window_size, self.max_cmd_len, -1)
+        _, hidden = self.rnn(x)
+        hidden = hidden.squeeze(0)
+        hidden = hidden.view(batch_size, self.window_size, -1)
+        return hidden
+
+
+class MneshOutterGRU(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.hidden_size = cfg["outer_hidden"]
+        self.rnn = nn.GRU(cfg["inner_hidden"], cfg["outer_hidden"], batch_first=True)
+
+    def forward(self, x):
+        _, hidden = self.rnn(x)
+        hidden = hidden.squeeze(0)
+        return hidden
+
+
+class MneshContextProjector(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.linear = nn.Linear(
+            cfg["outer_hidden"] + cfg["context_dim"],
+            cfg["outer_hidden"]
+        )
+
+    def forward(self, session_vector, context_vector):
+        full_vec = torch.cat([session_vector, context_vector], dim=-1)
+        return self.linear(full_vec)
+
+
+class MneshDecoder(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"])
+        self.rnn = nn.GRU(
+            cfg["token_emb_dim"] + cfg["outer_hidden"],
+            cfg["outer_hidden"],
+            batch_first=True
+        )
+        self.output_projection = nn.Linear(cfg["outer_hidden"], cfg["vocab_size"])
+
+    def forward(self, target_ids, seed):
+        embedded = self.embedding(target_ids)
+        seq_len = target_ids.size(1)
+        seed_expanded = seed.unsqueeze(1).expand(-1, seq_len, -1)
+        rnn_input = torch.cat([embedded, seed_expanded], dim=-1)
+        output, _ = self.rnn(rnn_input)
+        logits = self.output_projection(output)
+        return logits
 
 
 class MneshModel(nn.Module):
-    def __init__(self, vocab_size, token_emb_dim, inner_hidden, outer_hidden, context_emb_dim):
+    def __init__(self, cfg):
         super().__init__()
+        self.embedding  = MneshEmbedding(cfg)
+        self.inner_gru  = MneshInnerGRU(cfg)
+        self.outer_gru  = MneshOutterGRU(cfg)
+        self.projector  = MneshContextProjector(cfg)
+        self.decoder    = MneshDecoder(cfg)
 
-    def forward(self, input, context):
-        pass
+    def forward(self, input_ids, context, target_ids):
+        # input_ids:  (batch, 10, 32)
+        # context:    (batch, 5)
+        # target_ids: (batch, 32)
+
+        # step 1 — embed input tokens and context
+        tok_emb, ctx_vec = self.embedding(input_ids, context)
+        # tok_emb: (batch, 10, 32, 128)
+        # ctx_vec: (batch, 80)
+        cmd_vecs = self.inner_gru(tok_emb) # cmd_vecs: (batch, 10, 256)
+        session_vec = self.outer_gru(cmd_vecs) # session_vec: (batch, 512)
+        seed = self.projector(session_vec, ctx_vec) # seed: (batch, 512)
+        logits = self.decoder(target_ids, seed) # logits: (batch, 32, 18000)
+
+        return logits
