@@ -79,14 +79,21 @@ best_val_loss = float("inf")
 for epoch in range(EPOCHS):
     model.train()
     for batch in train_loader:
+
         input_ids  = batch["input"].to(DEVICE)
         context    = batch["context"].to(DEVICE)
         target_ids = batch["target"].to(DEVICE)
 
         optimizer.zero_grad()
+
+        decoder_input  = target_ids[:, :-1]   # drop last token
+        decoder_target = target_ids[:, 1:]    # drop first token (<s>)
+
         logits = model(input_ids, context, target_ids)
         loss   = criterion(logits.transpose(1, 2), target_ids)
+
         loss.backward()
+
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
@@ -103,8 +110,8 @@ for epoch in range(EPOCHS):
                 save_checkpoint(model, optimizer, epoch, step, val_loss, "checkpoints/mnesh_best.pt")
                 print(f"new best model saved — val loss {val_loss:.4f}")
 
-            # save regular checkpoint
-            save_checkpoint(model, optimizer, epoch, step, val_loss, f"checkpoints/mnesh_step_{step}.pt")
+            # remove the step checkpoint save - taking too much space
+            # save_checkpoint(model, optimizer, epoch, step, val_loss, f"checkpoints/mnesh_step_{step}.pt")
             model.train()
 
         step += 1
