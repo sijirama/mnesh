@@ -64,7 +64,6 @@ with torch.no_grad():
     session_vec = model.outer_gru(cmd_vecs)
     seed        = model.projector(session_vec, ctx_vec)
 
-    # autoregressive decoder
     bos_id = sp.piece_to_id("<s>")
     eos_id = sp.piece_to_id("</s>")
 
@@ -73,21 +72,36 @@ with torch.no_grad():
     max_tokens = 32
     temperature = 0.3
 
-    for _ in range(max_tokens):
+    # debug — check what bos and eos ids are
+    print(f"bos_id: {bos_id}, eos_id: {eos_id}")
+
+    for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)
-        embedded = model.decoder.embedding(current_token)
-        rnn_input = torch.cat([embedded, seed.unsqueeze(1)], dim=-1)
-        output, hidden = model.decoder.rnn(rnn_input, hidden)
-        logits = model.decoder.output_projection(output.squeeze(1))
+
+        # embed current token
+        embedded = model.decoder.embedding(current_token)  # (1, 1, 128)
+
+        # concat seed at this step
+        seed_step = seed.unsqueeze(1)  # (1, 1, 512)
+        rnn_input = torch.cat([embedded, seed_step], dim=-1)  # (1, 1, 640)
+
+        # pass through decoder rnn
+        output, hidden = model.decoder.rnn(rnn_input, hidden)  # output: (1, 1, 512)
+
+        # project to vocab
+        logits = model.decoder.output_projection(output.squeeze(1))  # (1, 18000)
         logits = logits / temperature
+
         probs = torch.softmax(logits, dim=-1)
         next_token = torch.multinomial(probs, num_samples=1).item()
+
+        print(f"step {step}: token_id={next_token} piece={sp.id_to_piece(next_token)}")
+
         if next_token == eos_id:
+            print("hit </s> — stopping")
             break
+
         generated.append(next_token)
 
-    suggestion = sp.decode_ids(generated[1:])  # skip <s>
-    print(f"\nrecent session:")
-    for cmd in test_commands:
-        print(f"  {cmd}")
+    suggestion = sp.decode_ids(generated[1:])
     print(f"\nmnesh suggests: {suggestion}")
