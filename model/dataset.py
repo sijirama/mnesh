@@ -165,14 +165,14 @@ class MneshDatasetV1(Dataset):
 
 # INFO: test the dataset
 
-dataset = MneshDatasetV1(split="train")
-print(f"total windows: {len(dataset)}")
-
-sample = dataset[0]
-print(f"input shape:   {sample['input'].shape}")
-print(f"context shape: {sample['context'].shape}")
-print(f"target shape:  {sample['target'].shape}")
-
-print(f"input[0]:  {sample['input'][0]}")
-print(f"context:   {sample['context']}")
-print(f"target:    {sample['target']}")
+# dataset = MneshDatasetV1(split="train")
+# print(f"total windows: {len(dataset)}")
+#
+# sample = dataset[0]
+# print(f"input shape:   {sample['input'].shape}")
+# print(f"context shape: {sample['context'].shape}")
+# print(f"target shape:  {sample['target'].shape}")
+#
+# print(f"input[0]:  {sample['input'][0]}")
+# print(f"context:   {sample['context']}")
+# print(f"target:    {sample['target']}")

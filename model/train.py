@@ -20,8 +20,8 @@ DEVICE        = "cuda" if torch.cuda.is_available() else "cpu"
 # setup
 train_dataset = MneshDatasetV1(split="train")
 val_dataset   = MneshDatasetV1(split="val")
-train_loader  = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-val_loader    = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+train_loader  = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+val_loader    = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 model         = MneshModel(CFG).to(DEVICE)
 criterion     = CrossEntropyLoss(ignore_index=0)
 optimizer     = Adam(model.parameters(), lr=LEARNING_RATE)
