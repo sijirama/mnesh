@@ -70,7 +70,6 @@ with torch.no_grad():
     generated = [bos_id]
     hidden = None
     max_tokens = 32
-    temperature = 0.3
 
     # debug — check what bos and eos ids are
     print(f"bos_id: {bos_id}, eos_id: {eos_id}")
@@ -90,10 +89,9 @@ with torch.no_grad():
 
         # project to vocab
         logits = model.decoder.output_projection(output.squeeze(1))  # (1, 18000)
-        logits = logits / temperature
 
-        probs = torch.softmax(logits, dim=-1)
-        next_token = torch.multinomial(probs, num_samples=1).item()
+        logits[0, sp.piece_to_id("<s>")] = -float("inf")
+        next_token = torch.argmax(logits, dim=-1).item()
 
         print(f"step {step}: token_id={next_token} piece={sp.id_to_piece(next_token)}")
 
