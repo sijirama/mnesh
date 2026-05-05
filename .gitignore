@@ -13,3 +13,4 @@ env.bak/
 venv.bak/
 .claude
 REMOTE_INFO
+.codex
