@@ -95,15 +95,13 @@ with torch.no_grad():
     seed        = model.projector(session_vec, ctx_vec)
 
     generated = [BOS_ID]
-    hidden    = None
+    hidden    = torch.tanh(model.decoder.seed_projection(seed)).unsqueeze(0)
     max_tokens = 32
 
     for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)
         embedded      = model.decoder.embedding(current_token)
-        seed_step     = seed.unsqueeze(1)
-        rnn_input     = torch.cat([embedded, seed_step], dim=-1)
-        output, hidden = model.decoder.rnn(rnn_input, hidden)
+        output, hidden = model.decoder.rnn(embedded, hidden)
         logits        = model.decoder.output_projection(output.squeeze(1))
 
         # mask special tokens

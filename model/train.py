@@ -48,8 +48,10 @@ def evaluate(model, loader, criterion, device):
             input_ids  = batch["input"].to(device)
             context    = batch["context"].to(device)
             target_ids = batch["target"].to(device)
-            logits = model(input_ids, context, target_ids)
-            loss = criterion(logits.transpose(1, 2), target_ids)
+            decoder_input = target_ids[:, :-1]
+            decoder_target = target_ids[:, 1:]
+            logits = model(input_ids, context, decoder_input)
+            loss = criterion(logits.transpose(1, 2), decoder_target)
             total_loss += loss.item()
             total_steps += 1
     return total_loss / total_steps
@@ -121,8 +123,8 @@ for epoch in range(EPOCHS):
         decoder_input  = target_ids[:, :-1]   # drop last token
         decoder_target = target_ids[:, 1:]    # drop first token (<s>)
 
-        logits = model(input_ids, context, target_ids)
-        loss   = criterion(logits.transpose(1, 2), target_ids)
+        logits = model(input_ids, context, decoder_input)
+        loss   = criterion(logits.transpose(1, 2), decoder_target)
 
         loss.backward()
 

@@ -87,18 +87,17 @@ class MneshDecoder(nn.Module):
         super().__init__()
         self.embedding = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"])
         self.rnn = nn.GRU(
-            cfg["token_emb_dim"] + cfg["outer_hidden"],
+            cfg["token_emb_dim"],
             cfg["outer_hidden"],
             batch_first=True
         )
+        self.seed_projection = nn.Linear(cfg["outer_hidden"], cfg["outer_hidden"])
         self.output_projection = nn.Linear(cfg["outer_hidden"], cfg["vocab_size"])
 
     def forward(self, target_ids, seed):
         embedded = self.embedding(target_ids)
-        seq_len = target_ids.size(1)
-        seed_expanded = seed.unsqueeze(1).expand(-1, seq_len, -1)
-        rnn_input = torch.cat([embedded, seed_expanded], dim=-1)
-        output, _ = self.rnn(rnn_input)
+        h0 = torch.tanh(self.seed_projection(seed)).unsqueeze(0)
+        output, _ = self.rnn(embedded, h0)
         logits = self.output_projection(output)
         return logits
 
