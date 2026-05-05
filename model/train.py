@@ -153,6 +153,12 @@ for epoch in range(EPOCHS):
     # save end of epoch checkpoint
     save_checkpoint(model, optimizer, epoch, step, loss.item(), f"checkpoints/mnesh_epoch_{epoch+1}.pt")
     print(f"epoch {epoch+1} complete")
+    notify(
+        title=f"mnesh epoch {epoch+1} complete",
+        message=f"epoch {epoch+1}/{EPOCHS} finished at step {step} with train loss {loss.item():.4f}",
+        level="info",
+        event="epoch_completed"
+    )
 
 print("training complete")
 
