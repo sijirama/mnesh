@@ -32,6 +32,13 @@ model         = MneshModel(CFG).to(DEVICE)
 criterion     = CrossEntropyLoss(ignore_index=0)
 optimizer     = Adam(model.parameters(), lr=LEARNING_RATE)
 
+# ── scheduled sampling helper ──────────────────────────────
+
+def get_teacher_forcing_ratio(epoch, step, total_steps):
+    """Linearly decay teacher forcing from 1.0 to 0.5 over training."""
+    progress = (epoch * len(train_loader) + step) / (EPOCHS * len(train_loader))
+    return max(0.5, 1.0 - progress * 0.5)
+
 total_params = sum(p.numel() for p in model.parameters())
 print(f"model parameters: {total_params:,}")
 print(f"training on:      {DEVICE}")
@@ -56,7 +63,7 @@ def evaluate(model, loader, criterion, device):
             total_steps += 1
     return total_loss / total_steps
 
-def notify(title, message, level="info", event="completed"):
+def notify(title, message, level="info", event="completed", best_val_loss=0, step=0):
     token = os.environ.get("BEACON_TOKEN", "")
     if not token:
         print("[beacon] no token set, skipping")
@@ -144,8 +151,6 @@ for epoch in range(EPOCHS):
                 save_checkpoint(model, optimizer, epoch, step, val_loss, "checkpoints/mnesh_best.pt")
                 print(f"new best model saved — val loss {val_loss:.4f}")
 
-            # remove the step checkpoint save - taking too much space
-            # save_checkpoint(model, optimizer, epoch, step, val_loss, f"checkpoints/mnesh_step_{step}.pt")
             model.train()
 
         step += 1
@@ -157,7 +162,9 @@ for epoch in range(EPOCHS):
         title=f"mnesh epoch {epoch+1} complete",
         message=f"epoch {epoch+1}/{EPOCHS} finished at step {step} with train loss {loss.item():.4f}",
         level="info",
-        event="epoch_completed"
+        event="epoch_completed",
+        best_val_loss=best_val_loss,
+        step=step
     )
 
 print("training complete")
@@ -166,7 +173,9 @@ notify(
     title="mnesh training complete",
     message=f"4 epochs done. best val loss: {best_val_loss:.4f} at step {step}",
     level="info",
-    event="completed"
+    event="completed",
+    best_val_loss=best_val_loss,
+    step=step
 )
 
 # generate run report

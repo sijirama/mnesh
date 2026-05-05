@@ -11,6 +11,7 @@ CFG = {
     "window_size":      10,
     "max_cmd_len":      32,
     "context_dim":      16 * 5,  # 80
+    "dropout":          0.2,
 }
 
 OS_CLASSES          = 2
@@ -22,15 +23,16 @@ GIT_CLASSES         = 2
 class MneshEmbedding(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.tok_emb   = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"])
+        self.tok_emb   = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"], padding_idx=0)
         self.os_emb    = nn.Embedding(OS_CLASSES, cfg["context_emb_dim"])
         self.shell_emb = nn.Embedding(SHELL_CLASSES, cfg["context_emb_dim"])
         self.ctx_emb   = nn.Embedding(SESSION_CTX_CLASSES, cfg["context_emb_dim"])
         self.cmd_emb   = nn.Embedding(CMD_TYPE_CLASSES, cfg["context_emb_dim"])
         self.git_emb   = nn.Embedding(GIT_CLASSES, cfg["context_emb_dim"])
+        self.dropout   = nn.Dropout(cfg["dropout"])
 
     def forward(self, token_ids, context):
-        tok   = self.tok_emb(token_ids)
+        tok   = self.dropout(self.tok_emb(token_ids))
         os_e  = self.os_emb(context[:, 0])
         sh_e  = self.shell_emb(context[:, 1])
         ctx_e = self.ctx_emb(context[:, 2])
@@ -47,12 +49,22 @@ class MneshInnerGRU(nn.Module):
         self.window_size = cfg["window_size"]
         self.max_cmd_len = cfg["max_cmd_len"]
         self.rnn = nn.GRU(cfg["token_emb_dim"], cfg["inner_hidden"], batch_first=True)
+        self.layer_norm = nn.LayerNorm(cfg["inner_hidden"])
+        self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, x):
+        # x: (batch, 10, 32, 128)
         batch_size = x.size(0)
         x = x.view(batch_size * self.window_size, self.max_cmd_len, -1)
-        _, hidden = self.rnn(x)
-        hidden = hidden.squeeze(0)
+        # Pack padded sequences to ignore padding
+        lengths = (x.abs().sum(dim=-1) != 0).sum(dim=1).clamp(min=1)
+        packed = nn.utils.rnn.pack_padded_sequence(
+            x, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        _, hidden = self.rnn(packed)
+        hidden = hidden.squeeze(0)  # (batch*10, 256)
+        hidden = self.layer_norm(hidden)
+        hidden = self.dropout(hidden)
         hidden = hidden.view(batch_size, self.window_size, -1)
         return hidden
 
@@ -61,31 +73,44 @@ class MneshOutterGRU(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.hidden_size = cfg["outer_hidden"]
-        self.rnn = nn.GRU(cfg["inner_hidden"], cfg["outer_hidden"], batch_first=True)
+        self.rnn = nn.GRU(cfg["inner_hidden"], cfg["outer_hidden"], batch_first=True, bidirectional=True)
+        self.layer_norm = nn.LayerNorm(cfg["outer_hidden"] * 2)
+        self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, x):
-        _, hidden = self.rnn(x)
-        hidden = hidden.squeeze(0)
+        # x: (batch, 10, 256)
+        output, hidden = self.rnn(x)
+        # hidden: (2, batch, 512) — forward + backward
+        # Concatenate both directions
+        hidden = torch.cat([hidden[0], hidden[1]], dim=-1)  # (batch, 1024)
+        hidden = self.layer_norm(hidden)
+        hidden = self.dropout(hidden)
         return hidden
 
 
 class MneshContextProjector(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        # outer_hidden * 2 because bidirectional
         self.linear = nn.Linear(
-            cfg["outer_hidden"] + cfg["context_dim"],
+            cfg["outer_hidden"] * 2 + cfg["context_dim"],
             cfg["outer_hidden"]
         )
+        self.layer_norm = nn.LayerNorm(cfg["outer_hidden"])
+        self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, session_vector, context_vector):
         full_vec = torch.cat([session_vector, context_vector], dim=-1)
-        return self.linear(full_vec)
+        out = self.linear(full_vec)
+        out = self.layer_norm(out)
+        out = self.dropout(out)
+        return out
 
 
 class MneshDecoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"])
+        self.embedding = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"], padding_idx=0)
         self.rnn = nn.GRU(
             cfg["token_emb_dim"],
             cfg["outer_hidden"],
@@ -93,10 +118,12 @@ class MneshDecoder(nn.Module):
         )
         self.seed_projection = nn.Linear(cfg["outer_hidden"], cfg["outer_hidden"])
         self.output_projection = nn.Linear(cfg["outer_hidden"], cfg["vocab_size"])
+        self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, target_ids, seed):
-        embedded = self.embedding(target_ids)
-        h0 = torch.tanh(self.seed_projection(seed)).unsqueeze(0)
+        embedded = self.dropout(self.embedding(target_ids))
+        # NO tanh — let the linear layer do its job
+        h0 = self.seed_projection(seed).unsqueeze(0)
         output, _ = self.rnn(embedded, h0)
         logits = self.output_projection(output)
         return logits
@@ -112,17 +139,9 @@ class MneshModel(nn.Module):
         self.decoder    = MneshDecoder(cfg)
 
     def forward(self, input_ids, context, target_ids):
-        # input_ids:  (batch, 10, 32)
-        # context:    (batch, 5)
-        # target_ids: (batch, 32)
-
-        # step 1 — embed input tokens and context
         tok_emb, ctx_vec = self.embedding(input_ids, context)
-        # tok_emb: (batch, 10, 32, 128)
-        # ctx_vec: (batch, 80)
-        cmd_vecs = self.inner_gru(tok_emb) # cmd_vecs: (batch, 10, 256)
-        session_vec = self.outer_gru(cmd_vecs) # session_vec: (batch, 512)
-        seed = self.projector(session_vec, ctx_vec) # seed: (batch, 512)
-        logits = self.decoder(target_ids, seed) # logits: (batch, 32, 18000)
-
+        cmd_vecs = self.inner_gru(tok_emb)
+        session_vec = self.outer_gru(cmd_vecs)
+        seed = self.projector(session_vec, ctx_vec)
+        logits = self.decoder(target_ids, seed)
         return logits

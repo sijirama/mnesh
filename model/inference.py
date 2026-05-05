@@ -1,5 +1,4 @@
 import os
-import time
 
 import requests
 import sentencepiece as spm
@@ -50,7 +49,7 @@ model.load_state_dict(checkpoint["model"])
 model.eval()
 print(f"model loaded — best val loss: {checkpoint['loss']:.4f}")
 
-# test commands
+# test commands — simulating a real session
 test_commands = [
     "cd ~/projects/api-service",
     "git status",
@@ -64,14 +63,16 @@ test_commands = [
     "git branch",
 ]
 
+# encode context — using sensible defaults
 context = torch.tensor([[
-    1,  # os: macos
+    1,  # os: linux=0, macos=1
     0,  # shell: zsh
     0,  # session_context: backend_dev
     1,  # cmd_type: git
     1,  # git_enabled: true
 ]], dtype=torch.long).to(DEVICE)
 
+# tokenise and pad each command
 def tokenize_cmd(cmd):
     ids = sp.encode_as_ids(cmd, add_bos=False, add_eos=False)
     ids = ids[:32]
@@ -88,21 +89,30 @@ BOS_ID = sp.piece_to_id("<s>")
 EOS_ID = sp.piece_to_id("</s>")
 REPETITION_PENALTY = 2.0
 
+# generate next command
 with torch.no_grad():
+    # encoder pass
     tok_emb, ctx_vec = model.embedding(input_ids, context)
     cmd_vecs    = model.inner_gru(tok_emb)
     session_vec = model.outer_gru(cmd_vecs)
     seed        = model.projector(session_vec, ctx_vec)
 
     generated = [BOS_ID]
-    hidden    = torch.tanh(model.decoder.seed_projection(seed)).unsqueeze(0)
+    hidden    = None
     max_tokens = 32
+
+    # debug — check what bos and eos ids are
+    print(f"bos_id: {BOS_ID}, eos_id: {EOS_ID}")
 
     for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)
-        embedded      = model.decoder.embedding(current_token)
-        output, hidden = model.decoder.rnn(embedded, hidden)
-        logits        = model.decoder.output_projection(output.squeeze(1))
+        # embed current token
+        embedded = model.decoder.embedding(current_token)  # (1, 1, 128)
+        # NO seed concat — seed is in h0
+        # pass through decoder rnn
+        output, hidden = model.decoder.rnn(embedded, hidden)  # output: (1, 1, 512)
+        # project to vocab
+        logits = model.decoder.output_projection(output.squeeze(1))  # (1, 18000)
 
         # mask special tokens
         logits[0, PAD_ID] = -float("inf")
