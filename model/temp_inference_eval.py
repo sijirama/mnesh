@@ -1,5 +1,5 @@
-import sentencepiece as spm
 import torch
+import sentencepiece as spm
 from huggingface_hub import hf_hub_download
 
 from model.main import CFG, MneshModel
@@ -39,7 +39,8 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
     with torch.no_grad():
         tok_emb, ctx_vec = model.embedding(input_ids, context)
         cmd_vecs = model.inner_gru(tok_emb, input_ids)
-        session_vec = model.outer_gru(cmd_vecs)
+        outer_outputs = model.outer_gru(cmd_vecs)
+        session_vec, attention_weights = model.attention_pool(outer_outputs)
         seed = model.projector(session_vec, ctx_vec)
 
         type_logits = model.cmd_type_head(session_vec)
@@ -80,7 +81,8 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
             (CMD_TYPE_NAMES[idx.item()], round(prob.item(), 4))
             for idx, prob in zip(top_type_ids[0], top_type_probs[0])
         ]
-        return top_types, text
+        attn = [round(weight, 4) for weight in attention_weights[0, :, 0].tolist()]
+        return top_types, attn, text
 
 
 def main():
@@ -121,12 +123,13 @@ def main():
         ctx_t = torch.tensor([ctx], dtype=torch.long, device=DEVICE)
         inp = torch.tensor([[tok(sp, cmd) for cmd in cmds]], dtype=torch.long, device=DEVICE)
 
-        greedy_types, greedy_text = run_session(model, sp, inp, ctx_t, temp=0.1, top_k=1)
-        sample_types, sample_text1 = run_session(model, sp, inp, ctx_t, temp=0.8, top_k=5)
-        _, sample_text2 = run_session(model, sp, inp, ctx_t, temp=0.8, top_k=5)
+        greedy_types, greedy_attn, greedy_text = run_session(model, sp, inp, ctx_t, temp=0.1, top_k=1)
+        sample_types, sample_attn, sample_text1 = run_session(model, sp, inp, ctx_t, temp=0.8, top_k=5)
+        _, _, sample_text2 = run_session(model, sp, inp, ctx_t, temp=0.8, top_k=5)
 
         print(f"\n=== {name.upper()} ===")
         print("top cmd_types:", greedy_types)
+        print("attention:", greedy_attn)
         print("greedy:", greedy_text)
         print("sample:", sample_text1)
         print("sample:", sample_text2)

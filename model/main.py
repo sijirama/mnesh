@@ -77,11 +77,21 @@ class MneshOutterGRU(nn.Module):
         self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, x):
-        _, hidden = self.rnn(x)
-        hidden = torch.cat([hidden[0], hidden[1]], dim=-1)
-        hidden = self.layer_norm(hidden)
-        hidden = self.dropout(hidden)
-        return hidden
+        outputs, _ = self.rnn(x)
+        outputs = self.layer_norm(outputs)
+        outputs = self.dropout(outputs)
+        return outputs
+
+
+class MneshAttentionPool(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.score = nn.Linear(cfg["outer_hidden"] * 2, 1)
+
+    def forward(self, x):
+        weights = torch.softmax(self.score(x), dim=1)
+        pooled = torch.sum(weights * x, dim=1)
+        return pooled, weights
 
 
 class MneshContextProjector(nn.Module):
@@ -140,6 +150,7 @@ class MneshModel(nn.Module):
         self.embedding  = MneshEmbedding(cfg)
         self.inner_gru  = MneshInnerGRU(cfg)
         self.outer_gru  = MneshOutterGRU(cfg)
+        self.attention_pool = MneshAttentionPool(cfg)
         self.projector  = MneshContextProjector(cfg)
         self.decoder    = MneshDecoder(cfg)
         self.cmd_type_head = MneshCmdTypeHead(cfg)
@@ -147,7 +158,8 @@ class MneshModel(nn.Module):
     def forward(self, input_ids, context, target_ids):
         tok_emb, ctx_vec = self.embedding(input_ids, context)
         cmd_vecs = self.inner_gru(tok_emb, input_ids)
-        session_vec = self.outer_gru(cmd_vecs)
+        outer_outputs = self.outer_gru(cmd_vecs)
+        session_vec, _ = self.attention_pool(outer_outputs)
         seed = self.projector(session_vec, ctx_vec)
         logits = self.decoder(target_ids, seed)
         cmd_type_logits = self.cmd_type_head(session_vec)

@@ -265,7 +265,7 @@ print(f"report saved →    {report_path}")
 print("────────────────────────────────────────────\n")
 
 # auto stop pod when done
-pod_id = os.environ.get("RUNPOD_POD_ID", "")
-if pod_id:
-    print(f"stopping pod {pod_id}...")
-    subprocess.run(["runpodctl", "stop", "pod", pod_id])
+# pod_id = os.environ.get("RUNPOD_POD_ID", "")
+# if pod_id:
+#     print(f"stopping pod {pod_id}...")
+#     subprocess.run(["runpodctl", "stop", "pod", pod_id])
