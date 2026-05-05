@@ -156,11 +156,13 @@ class MneshDatasetV1(Dataset):
         input_tensor   = torch.tensor(input_ids, dtype=torch.long)
         context_tensor = torch.tensor(self._encode_context(window[-1]), dtype=torch.long)
         target_tensor  = torch.tensor(self._tokenize_target(target["cmd"]), dtype=torch.long)
+        target_cmd_type = self.cmd_type_map.get(target["cmd_type"], 0)
 
         return {
             "input":   input_tensor,
             "context": context_tensor,
             "target":  target_tensor,
+            "target_cmd_type": torch.tensor(target_cmd_type, dtype=torch.long),
         }
 
 # INFO: test the dataset

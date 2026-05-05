@@ -1,12 +1,14 @@
 import json
 import os
 import subprocess
+from collections import Counter
 from datetime import datetime
 
 import requests
 import torch
 from torch.nn import CrossEntropyLoss
-from torch.optim import Adam
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 
 from model.dataset import MneshDatasetV1
@@ -29,15 +31,43 @@ val_dataset   = MneshDatasetV1(split="val")
 train_loader  = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,  num_workers=4, pin_memory=True)
 val_loader    = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
 model         = MneshModel(CFG).to(DEVICE)
-criterion     = CrossEntropyLoss(ignore_index=0)
-optimizer     = Adam(model.parameters(), lr=LEARNING_RATE)
 
-# ── scheduled sampling helper ──────────────────────────────
+CMD_TYPE_NAMES = [
+    "filesystem", "git", "process", "network", "package", "docker",
+    "k8s", "python", "node", "system", "text_processing", "ssh", "misc",
+]
 
-def get_teacher_forcing_ratio(epoch, step, total_steps):
-    """Linearly decay teacher forcing from 1.0 to 0.5 over training."""
-    progress = (epoch * len(train_loader) + step) / (EPOCHS * len(train_loader))
-    return max(0.5, 1.0 - progress * 0.5)
+
+def build_cmd_type_class_weights(dataset):
+    target_types = [
+        window_target["cmd_type"]
+        for _, window_target in dataset._get_windows()
+    ]
+    counts = Counter(target_types)
+    total = sum(counts.values())
+    weights = torch.tensor(
+        [total / (len(CMD_TYPE_NAMES) * counts.get(name, 1)) for name in CMD_TYPE_NAMES],
+        dtype=torch.float,
+        device=DEVICE,
+    )
+    return weights / weights.sum() * len(CMD_TYPE_NAMES)
+
+
+class_weights = build_cmd_type_class_weights(train_dataset)
+criterion = CrossEntropyLoss(ignore_index=0, label_smoothing=0.1)
+cmd_type_criterion = CrossEntropyLoss(weight=class_weights)
+optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
+
+warmup_steps = max(1, int(0.1 * EPOCHS * len(train_loader)))
+total_training_steps = EPOCHS * len(train_loader)
+warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_steps)
+cosine = CosineAnnealingLR(
+    optimizer,
+    T_max=max(1, total_training_steps - warmup_steps),
+    eta_min=1e-5,
+)
+scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps])
+ALPHA = 0.3
 
 total_params = sum(p.numel() for p in model.parameters())
 print(f"model parameters: {total_params:,}")
@@ -57,11 +87,27 @@ def evaluate(model, loader, criterion, device):
             target_ids = batch["target"].to(device)
             decoder_input = target_ids[:, :-1]
             decoder_target = target_ids[:, 1:]
-            logits = model(input_ids, context, decoder_input)
+            logits, _ = model(input_ids, context, decoder_input)
             loss = criterion(logits.transpose(1, 2), decoder_target)
             total_loss += loss.item()
             total_steps += 1
     return total_loss / total_steps
+
+
+def evaluate_cmd_type_accuracy(model, loader, device):
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for batch in loader:
+            input_ids = batch["input"].to(device)
+            context = batch["context"].to(device)
+            target_ids = batch["target"].to(device)
+            target_cmd_types = batch["target_cmd_type"].to(device)
+            _, cmd_type_logits = model(input_ids, context, target_ids[:, :-1])
+            preds = cmd_type_logits.argmax(dim=-1)
+            correct += (preds == target_cmd_types).sum().item()
+            total += target_cmd_types.size(0)
+    return correct / total if total > 0 else 0.0
 
 def notify(title, message, level="info", event="completed", best_val_loss=0, step=0):
     token = os.environ.get("BEACON_TOKEN", "")
@@ -124,26 +170,38 @@ for epoch in range(EPOCHS):
         input_ids  = batch["input"].to(DEVICE)
         context    = batch["context"].to(DEVICE)
         target_ids = batch["target"].to(DEVICE)
+        target_cmd_types = batch["target_cmd_type"].to(DEVICE)
 
         optimizer.zero_grad()
 
         decoder_input  = target_ids[:, :-1]   # drop last token
         decoder_target = target_ids[:, 1:]    # drop first token (<s>)
 
-        logits = model(input_ids, context, decoder_input)
-        loss   = criterion(logits.transpose(1, 2), decoder_target)
+        logits, cmd_type_logits = model(input_ids, context, decoder_input)
+        cmd_loss = criterion(logits.transpose(1, 2), decoder_target)
+        type_loss = cmd_type_criterion(cmd_type_logits, target_cmd_types)
+        loss = cmd_loss + ALPHA * type_loss
 
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
+        scheduler.step()
 
         if step % 100 == 0:
-            print(f"epoch {epoch+1} | step {step} | loss {loss.item():.4f}")
+            lr = scheduler.get_last_lr()[0]
+            print(
+                f"epoch {epoch+1} | step {step} | loss {loss.item():.4f} "
+                f"| cmd {cmd_loss.item():.4f} | type {type_loss.item():.4f} | lr {lr:.6f}"
+            )
 
         if step % EVAL_EVERY == 0 and step > 0:
             val_loss = evaluate(model, val_loader, criterion, DEVICE)
-            print(f"epoch {epoch+1} | step {step} | train {loss.item():.4f} | val {val_loss:.4f}")
+            type_acc = evaluate_cmd_type_accuracy(model, val_loader, DEVICE)
+            print(
+                f"epoch {epoch+1} | step {step} | train {loss.item():.4f} "
+                f"| val {val_loss:.4f} | type_acc {type_acc:.4f}"
+            )
 
             # save best model
             if val_loss < best_val_loss:

@@ -52,17 +52,16 @@ class MneshInnerGRU(nn.Module):
         self.layer_norm = nn.LayerNorm(cfg["inner_hidden"])
         self.dropout = nn.Dropout(cfg["dropout"])
 
-    def forward(self, x):
-        # x: (batch, 10, 32, 128)
+    def forward(self, x, token_ids):
         batch_size = x.size(0)
         x = x.view(batch_size * self.window_size, self.max_cmd_len, -1)
-        # Pack padded sequences to ignore padding
-        lengths = (x.abs().sum(dim=-1) != 0).sum(dim=1).clamp(min=1)
+        flat_token_ids = token_ids.view(batch_size * self.window_size, self.max_cmd_len)
+        lengths = flat_token_ids.ne(0).sum(dim=1).clamp(min=1)
         packed = nn.utils.rnn.pack_padded_sequence(
             x, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
         _, hidden = self.rnn(packed)
-        hidden = hidden.squeeze(0)  # (batch*10, 256)
+        hidden = hidden.squeeze(0)
         hidden = self.layer_norm(hidden)
         hidden = self.dropout(hidden)
         hidden = hidden.view(batch_size, self.window_size, -1)
@@ -78,11 +77,8 @@ class MneshOutterGRU(nn.Module):
         self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, x):
-        # x: (batch, 10, 256)
-        output, hidden = self.rnn(x)
-        # hidden: (2, batch, 512) — forward + backward
-        # Concatenate both directions
-        hidden = torch.cat([hidden[0], hidden[1]], dim=-1)  # (batch, 1024)
+        _, hidden = self.rnn(x)
+        hidden = torch.cat([hidden[0], hidden[1]], dim=-1)
         hidden = self.layer_norm(hidden)
         hidden = self.dropout(hidden)
         return hidden
@@ -129,6 +125,15 @@ class MneshDecoder(nn.Module):
         return logits
 
 
+class MneshCmdTypeHead(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.linear = nn.Linear(cfg["outer_hidden"] * 2, CMD_TYPE_CLASSES)
+
+    def forward(self, session_vec):
+        return self.linear(session_vec)
+
+
 class MneshModel(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -137,11 +142,13 @@ class MneshModel(nn.Module):
         self.outer_gru  = MneshOutterGRU(cfg)
         self.projector  = MneshContextProjector(cfg)
         self.decoder    = MneshDecoder(cfg)
+        self.cmd_type_head = MneshCmdTypeHead(cfg)
 
     def forward(self, input_ids, context, target_ids):
         tok_emb, ctx_vec = self.embedding(input_ids, context)
-        cmd_vecs = self.inner_gru(tok_emb)
+        cmd_vecs = self.inner_gru(tok_emb, input_ids)
         session_vec = self.outer_gru(cmd_vecs)
         seed = self.projector(session_vec, ctx_vec)
         logits = self.decoder(target_ids, seed)
-        return logits
+        cmd_type_logits = self.cmd_type_head(session_vec)
+        return logits, cmd_type_logits

@@ -88,31 +88,32 @@ PAD_ID = 0
 BOS_ID = sp.piece_to_id("<s>")
 EOS_ID = sp.piece_to_id("</s>")
 REPETITION_PENALTY = 2.0
+CMD_TYPE_NAMES = [
+    "filesystem", "git", "process", "network", "package", "docker",
+    "k8s", "python", "node", "system", "text_processing", "ssh", "misc",
+]
 
 # generate next command
 with torch.no_grad():
     # encoder pass
     tok_emb, ctx_vec = model.embedding(input_ids, context)
-    cmd_vecs    = model.inner_gru(tok_emb)
+    cmd_vecs    = model.inner_gru(tok_emb, input_ids)
     session_vec = model.outer_gru(cmd_vecs)
     seed        = model.projector(session_vec, ctx_vec)
+    cmd_type_logits = model.cmd_type_head(session_vec)
+    predicted_type = cmd_type_logits.argmax(dim=-1).item()
 
     generated = [BOS_ID]
-    hidden    = None
+    hidden    = model.decoder.seed_projection(seed).unsqueeze(0)
     max_tokens = 32
 
-    # debug — check what bos and eos ids are
-    print(f"bos_id: {BOS_ID}, eos_id: {EOS_ID}")
+    print(f"predicted cmd_type: {CMD_TYPE_NAMES[predicted_type]}")
 
     for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)
-        # embed current token
-        embedded = model.decoder.embedding(current_token)  # (1, 1, 128)
-        # NO seed concat — seed is in h0
-        # pass through decoder rnn
-        output, hidden = model.decoder.rnn(embedded, hidden)  # output: (1, 1, 512)
-        # project to vocab
-        logits = model.decoder.output_projection(output.squeeze(1))  # (1, 18000)
+        embedded = model.decoder.embedding(current_token)
+        output, hidden = model.decoder.rnn(embedded, hidden)
+        logits = model.decoder.output_projection(output.squeeze(1))
 
         # mask special tokens
         logits[0, PAD_ID] = -float("inf")
