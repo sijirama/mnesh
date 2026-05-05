@@ -3,6 +3,7 @@ import os
 import subprocess
 from datetime import datetime
 
+import requests
 import torch
 from torch.nn import CrossEntropyLoss
 from torch.optim import Adam
@@ -52,6 +53,37 @@ def evaluate(model, loader, criterion, device):
             total_loss += loss.item()
             total_steps += 1
     return total_loss / total_steps
+
+def notify(title, message, level="info", event="completed"):
+    token = os.environ.get("BEACON_TOKEN", "")
+    if not token:
+        print("[beacon] no token set, skipping")
+        return
+    try:
+        r = requests.post(
+            "https://beacon.sijibomi.com/emit",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "title": title,
+                "message": message,
+                "source": "mnesh-training",
+                "event": event,
+                "level": level,
+                "channel": "email",
+                "metadata": {
+                    "best_val_loss": best_val_loss,
+                    "total_steps": step,
+                    "epochs": EPOCHS,
+                    "batch_size": BATCH_SIZE,
+                }
+            }
+        )
+        print(f"[beacon] {r.status_code}")
+    except Exception as e:
+        print(f"[beacon] failed: {e}")
 
 def save_checkpoint(model, optimizer, epoch, step, loss, path):
     os.makedirs("checkpoints", exist_ok=True)
@@ -121,6 +153,13 @@ for epoch in range(EPOCHS):
     print(f"epoch {epoch+1} complete")
 
 print("training complete")
+
+notify(
+    title="mnesh training complete",
+    message=f"4 epochs done. best val loss: {best_val_loss:.4f} at step {step}",
+    level="info",
+    event="completed"
+)
 
 # generate run report
 report = {
