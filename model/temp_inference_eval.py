@@ -41,7 +41,6 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
         cmd_vecs = model.inner_gru(tok_emb, input_ids)
         outer_outputs = model.outer_gru(cmd_vecs)
         session_vec, attention_weights = model.attention_pool(outer_outputs)
-        session_vec = model.session_refiner(session_vec)
         seed = model.projector(session_vec, ctx_vec)
 
         type_logits = model.cmd_type_head(session_vec)

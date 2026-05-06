@@ -100,7 +100,6 @@ with torch.no_grad():
     cmd_vecs    = model.inner_gru(tok_emb, input_ids)
     outer_outputs = model.outer_gru(cmd_vecs)
     session_vec, attention_weights = model.attention_pool(outer_outputs)
-    session_vec = model.session_refiner(session_vec)
     seed        = model.projector(session_vec, ctx_vec)
     cmd_type_logits = model.cmd_type_head(session_vec)
     predicted_type = cmd_type_logits.argmax(dim=-1).item()
