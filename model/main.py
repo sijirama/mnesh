@@ -5,6 +5,7 @@ import torch.nn as nn
 CFG = {
     "vocab_size":       18000,
     "token_emb_dim":    128,
+    "type_emb_dim":     64,
     "context_emb_dim":  16,
     "inner_hidden":     256,
     "outer_hidden":     512,
@@ -97,16 +98,15 @@ class MneshAttentionPool(nn.Module):
 class MneshContextProjector(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        # outer_hidden * 2 because bidirectional
         self.linear = nn.Linear(
-            cfg["outer_hidden"] * 2 + cfg["context_dim"],
+            cfg["outer_hidden"] * 2 + cfg["context_dim"] + cfg["type_emb_dim"],
             cfg["outer_hidden"]
         )
         self.layer_norm = nn.LayerNorm(cfg["outer_hidden"])
         self.dropout = nn.Dropout(cfg["dropout"])
 
-    def forward(self, session_vector, context_vector):
-        full_vec = torch.cat([session_vector, context_vector], dim=-1)
+    def forward(self, session_vector, context_vector, type_vector):
+        full_vec = torch.cat([session_vector, context_vector, type_vector], dim=-1)
         out = self.linear(full_vec)
         out = self.layer_norm(out)
         out = self.dropout(out)
@@ -117,8 +117,9 @@ class MneshDecoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.embedding = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"], padding_idx=0)
+        self.type_embedding = nn.Embedding(CMD_TYPE_CLASSES, cfg["type_emb_dim"])
         self.rnn = nn.GRU(
-            cfg["token_emb_dim"],
+            cfg["token_emb_dim"] + cfg["type_emb_dim"],
             cfg["outer_hidden"],
             batch_first=True
         )
@@ -126,9 +127,11 @@ class MneshDecoder(nn.Module):
         self.output_projection = nn.Linear(cfg["outer_hidden"], cfg["vocab_size"])
         self.dropout = nn.Dropout(cfg["dropout"])
 
-    def forward(self, target_ids, seed):
-        embedded = self.dropout(self.embedding(target_ids))
-        # NO tanh — let the linear layer do its job
+    def forward(self, target_ids, seed, cmd_type_ids):
+        token_embedded = self.dropout(self.embedding(target_ids))
+        type_embedded = self.type_embedding(cmd_type_ids).unsqueeze(1)
+        type_embedded = type_embedded.expand(-1, target_ids.size(1), -1)
+        embedded = torch.cat([token_embedded, type_embedded], dim=-1)
         h0 = self.seed_projection(seed).unsqueeze(0)
         output, _ = self.rnn(embedded, h0)
         logits = self.output_projection(output)
@@ -155,12 +158,13 @@ class MneshModel(nn.Module):
         self.decoder    = MneshDecoder(cfg)
         self.cmd_type_head = MneshCmdTypeHead(cfg)
 
-    def forward(self, input_ids, context, target_ids):
+    def forward(self, input_ids, context, target_ids, cmd_type_ids):
         tok_emb, ctx_vec = self.embedding(input_ids, context)
         cmd_vecs = self.inner_gru(tok_emb, input_ids)
         outer_outputs = self.outer_gru(cmd_vecs)
         session_vec, _ = self.attention_pool(outer_outputs)
-        seed = self.projector(session_vec, ctx_vec)
-        logits = self.decoder(target_ids, seed)
+        type_vec = self.decoder.type_embedding(cmd_type_ids)
+        seed = self.projector(session_vec, ctx_vec, type_vec)
+        logits = self.decoder(target_ids, seed, cmd_type_ids)
         cmd_type_logits = self.cmd_type_head(session_vec)
         return logits, cmd_type_logits

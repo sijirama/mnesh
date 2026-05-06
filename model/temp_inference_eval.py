@@ -41,18 +41,22 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
         cmd_vecs = model.inner_gru(tok_emb, input_ids)
         outer_outputs = model.outer_gru(cmd_vecs)
         session_vec, attention_weights = model.attention_pool(outer_outputs)
-        seed = model.projector(session_vec, ctx_vec)
 
         type_logits = model.cmd_type_head(session_vec)
         type_probs = torch.softmax(type_logits, dim=-1)
         top_type_probs, top_type_ids = torch.topk(type_probs, 3, dim=-1)
+        predicted_type_ids = top_type_ids[:, :1].squeeze(1)
+        type_vec = model.decoder.type_embedding(predicted_type_ids)
+        seed = model.projector(session_vec, ctx_vec, type_vec)
 
         hidden = model.decoder.seed_projection(seed).unsqueeze(0)
         generated = [bos_id]
 
         for _ in range(32):
             current = torch.tensor([[generated[-1]]], dtype=torch.long, device=DEVICE)
-            embedded = model.decoder.embedding(current)
+            token_embedded = model.decoder.embedding(current)
+            type_embedded = model.decoder.type_embedding(predicted_type_ids).unsqueeze(1)
+            embedded = torch.cat([token_embedded, type_embedded], dim=-1)
             output, hidden = model.decoder.rnn(embedded, hidden)
             logits = model.decoder.output_projection(output.squeeze(1))
 

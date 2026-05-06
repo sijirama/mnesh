@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import requests
 import sentencepiece as spm
@@ -9,6 +10,7 @@ from model.main import CFG, MneshModel
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BEACON_TOKEN = os.environ.get("BEACON_TOKEN", "")
+MODEL_VERSION = Path("model/VERSION").read_text().strip()
 
 def notify(title, message, level="info", event="inference"):
     if not BEACON_TOKEN:
@@ -48,6 +50,7 @@ checkpoint = torch.load("checkpoints/mnesh_best.pt", map_location=DEVICE)
 model.load_state_dict(checkpoint["model"])
 model.eval()
 print(f"model loaded — best val loss: {checkpoint['loss']:.4f}")
+print(f"model version: {MODEL_VERSION}")
 
 # test commands — simulating a real session
 test_commands = [
@@ -100,9 +103,11 @@ with torch.no_grad():
     cmd_vecs    = model.inner_gru(tok_emb, input_ids)
     outer_outputs = model.outer_gru(cmd_vecs)
     session_vec, attention_weights = model.attention_pool(outer_outputs)
-    seed        = model.projector(session_vec, ctx_vec)
     cmd_type_logits = model.cmd_type_head(session_vec)
     predicted_type = cmd_type_logits.argmax(dim=-1).item()
+    predicted_type_ids = torch.tensor([predicted_type], dtype=torch.long, device=DEVICE)
+    type_vec = model.decoder.type_embedding(predicted_type_ids)
+    seed = model.projector(session_vec, ctx_vec, type_vec)
 
     generated = [BOS_ID]
     hidden    = model.decoder.seed_projection(seed).unsqueeze(0)
@@ -113,7 +118,9 @@ with torch.no_grad():
 
     for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)
-        embedded = model.decoder.embedding(current_token)
+        token_embedded = model.decoder.embedding(current_token)
+        type_embedded = model.decoder.type_embedding(predicted_type_ids).unsqueeze(1)
+        embedded = torch.cat([token_embedded, type_embedded], dim=-1)
         output, hidden = model.decoder.rnn(embedded, hidden)
         logits = model.decoder.output_projection(output.squeeze(1))
 

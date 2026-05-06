@@ -3,6 +3,7 @@ import os
 import subprocess
 from collections import Counter
 from datetime import datetime
+from pathlib import Path
 
 import requests
 import torch
@@ -24,6 +25,7 @@ LEARNING_RATE = 0.001
 EPOCHS        = 4
 EVAL_EVERY    = 500
 DEVICE        = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_VERSION = Path("model/VERSION").read_text().strip()
 
 # setup
 train_dataset = MneshDatasetV1(split="train")
@@ -67,13 +69,17 @@ cosine = CosineAnnealingLR(
     eta_min=1e-5,
 )
 scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps])
-ALPHA = 0.3
+
+
+def get_alpha(epoch):
+    return 1.0 if epoch < 2 else 0.3
 
 total_params = sum(p.numel() for p in model.parameters())
 print(f"model parameters: {total_params:,}")
 print(f"training on:      {DEVICE}")
 print(f"train batches:    {len(train_loader)}")
 print(f"val batches:      {len(val_loader)}")
+print(f"model version:    {MODEL_VERSION}")
 
 # ── helpers ──────────────────────────────────────────────
 
@@ -85,9 +91,10 @@ def evaluate(model, loader, criterion, device):
             input_ids  = batch["input"].to(device)
             context    = batch["context"].to(device)
             target_ids = batch["target"].to(device)
+            target_cmd_types = batch["target_cmd_type"].to(device)
             decoder_input = target_ids[:, :-1]
             decoder_target = target_ids[:, 1:]
-            logits, _ = model(input_ids, context, decoder_input)
+            logits, _ = model(input_ids, context, decoder_input, target_cmd_types)
             loss = criterion(logits.transpose(1, 2), decoder_target)
             total_loss += loss.item()
             total_steps += 1
@@ -103,7 +110,7 @@ def evaluate_cmd_type_accuracy(model, loader, device):
             context = batch["context"].to(device)
             target_ids = batch["target"].to(device)
             target_cmd_types = batch["target_cmd_type"].to(device)
-            _, cmd_type_logits = model(input_ids, context, target_ids[:, :-1])
+            _, cmd_type_logits = model(input_ids, context, target_ids[:, :-1], target_cmd_types)
             preds = cmd_type_logits.argmax(dim=-1)
             correct += (preds == target_cmd_types).sum().item()
             total += target_cmd_types.size(0)
@@ -176,11 +183,12 @@ for epoch in range(EPOCHS):
 
         decoder_input  = target_ids[:, :-1]   # drop last token
         decoder_target = target_ids[:, 1:]    # drop first token (<s>)
+        alpha = get_alpha(epoch)
 
-        logits, cmd_type_logits = model(input_ids, context, decoder_input)
+        logits, cmd_type_logits = model(input_ids, context, decoder_input, target_cmd_types)
         cmd_loss = criterion(logits.transpose(1, 2), decoder_target)
         type_loss = cmd_type_criterion(cmd_type_logits, target_cmd_types)
-        loss = cmd_loss + ALPHA * type_loss
+        loss = cmd_loss + alpha * type_loss
 
         loss.backward()
 
@@ -192,7 +200,8 @@ for epoch in range(EPOCHS):
             lr = scheduler.get_last_lr()[0]
             print(
                 f"epoch {epoch+1} | step {step} | loss {loss.item():.4f} "
-                f"| cmd {cmd_loss.item():.4f} | type {type_loss.item():.4f} | lr {lr:.6f}"
+                f"| cmd {cmd_loss.item():.4f} | type {type_loss.item():.4f} "
+                f"| alpha {alpha:.2f} | lr {lr:.6f}"
             )
 
         if step % EVAL_EVERY == 0 and step > 0:
@@ -246,6 +255,7 @@ report = {
     "best_val_loss":   best_val_loss,
     "model_params":    total_params,
     "device":          DEVICE,
+    "model_version":   MODEL_VERSION,
     "cfg":             CFG,
     "final_train_loss": loss.item(),
     "checkpoints_saved": os.listdir("checkpoints") if os.path.exists("checkpoints") else [],
