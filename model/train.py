@@ -56,7 +56,7 @@ def build_cmd_type_class_weights(dataset):
 
 
 class_weights = build_cmd_type_class_weights(train_dataset)
-criterion = CrossEntropyLoss(ignore_index=0, label_smoothing=0.1)
+criterion = CrossEntropyLoss(ignore_index=0, label_smoothing=0.1, reduction="none")
 cmd_type_criterion = CrossEntropyLoss(weight=class_weights)
 optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=0.01)
 
@@ -73,6 +73,14 @@ scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[war
 
 def get_alpha(epoch):
     return 1.0 if epoch < 2 else 0.3
+
+
+def weighted_sequence_loss(logits, decoder_target, weights, criterion):
+    token_loss = criterion(logits.transpose(1, 2), decoder_target)
+    valid_mask = decoder_target.ne(0)
+    valid_counts = valid_mask.sum(dim=1).clamp(min=1)
+    seq_loss = (token_loss * valid_mask).sum(dim=1) / valid_counts
+    return (seq_loss * weights).mean()
 
 total_params = sum(p.numel() for p in model.parameters())
 print(f"model parameters: {total_params:,}")
@@ -92,10 +100,11 @@ def evaluate(model, loader, criterion, device):
             context    = batch["context"].to(device)
             target_ids = batch["target"].to(device)
             target_cmd_types = batch["target_cmd_type"].to(device)
+            weights = batch["weight"].to(device)
             decoder_input = target_ids[:, :-1]
             decoder_target = target_ids[:, 1:]
             logits, _ = model(input_ids, context, decoder_input, target_cmd_types)
-            loss = criterion(logits.transpose(1, 2), decoder_target)
+            loss = weighted_sequence_loss(logits, decoder_target, weights, criterion)
             total_loss += loss.item()
             total_steps += 1
     return total_loss / total_steps
@@ -178,6 +187,7 @@ for epoch in range(EPOCHS):
         context    = batch["context"].to(DEVICE)
         target_ids = batch["target"].to(DEVICE)
         target_cmd_types = batch["target_cmd_type"].to(DEVICE)
+        weights = batch["weight"].to(DEVICE)
 
         optimizer.zero_grad()
 
@@ -186,7 +196,7 @@ for epoch in range(EPOCHS):
         alpha = get_alpha(epoch)
 
         logits, cmd_type_logits = model(input_ids, context, decoder_input, target_cmd_types)
-        cmd_loss = criterion(logits.transpose(1, 2), decoder_target)
+        cmd_loss = weighted_sequence_loss(logits, decoder_target, weights, criterion)
         type_loss = cmd_type_criterion(cmd_type_logits, target_cmd_types)
         loss = cmd_loss + alpha * type_loss
 

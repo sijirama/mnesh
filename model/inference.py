@@ -110,7 +110,8 @@ with torch.no_grad():
     seed = model.projector(session_vec, ctx_vec, type_vec)
 
     generated = [BOS_ID]
-    hidden    = model.decoder.seed_projection(seed).unsqueeze(0)
+    hidden = model.decoder.seed_projection(seed)
+    hidden = hidden.view(1, model.decoder.num_layers, model.decoder.hidden_size).transpose(0, 1).contiguous()
     max_tokens = 32
 
     print(f"predicted cmd_type: {CMD_TYPE_NAMES[predicted_type]}")
@@ -119,9 +120,12 @@ with torch.no_grad():
     for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)
         token_embedded = model.decoder.embedding(current_token)
-        type_embedded = model.decoder.type_embedding(predicted_type_ids).unsqueeze(1)
-        embedded = torch.cat([token_embedded, type_embedded], dim=-1)
-        output, hidden = model.decoder.rnn(embedded, hidden)
+        raw_type_embedded = model.decoder.type_embedding(predicted_type_ids).unsqueeze(1)
+        gate_input = torch.cat([token_embedded, raw_type_embedded], dim=-1)
+        gate = model.decoder.gate(gate_input)
+        type_embedded = model.decoder.type_adapter(raw_type_embedded)
+        fused = token_embedded + gate * type_embedded
+        output, hidden = model.decoder.rnn(fused, hidden)
         logits = model.decoder.output_projection(output.squeeze(1))
 
         # mask special tokens

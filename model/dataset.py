@@ -17,6 +17,14 @@ COMMIT_PATTERNS = [
     r'git commit -a -m ["\']',
 ]
 
+NOISY_COMMANDS = {
+    "ls", "ls -la", "ls -lah", "ls -l",
+    "cd", "cd ..", "cd ~", "cd -",
+    "pwd", "clear", "exit", "history",
+    "cat README.md", "cat .gitignore", "cat package.json",
+    "echo", "whoami", "date",
+}
+
 class MneshDatasetV1(Dataset):
     def __init__(self, split="train"):
         self.max_cmd_len = 32
@@ -157,12 +165,15 @@ class MneshDatasetV1(Dataset):
         context_tensor = torch.tensor(self._encode_context(window[-1]), dtype=torch.long)
         target_tensor  = torch.tensor(self._tokenize_target(target["cmd"]), dtype=torch.long)
         target_cmd_type = self.cmd_type_map.get(target["cmd_type"], 0)
+        target_cmd = target["cmd"].strip()
+        weight = 0.1 if target_cmd in NOISY_COMMANDS else 1.0
 
         return {
             "input":   input_tensor,
             "context": context_tensor,
             "target":  target_tensor,
             "target_cmd_type": torch.tensor(target_cmd_type, dtype=torch.long),
+            "weight": torch.tensor(weight, dtype=torch.float),
         }
 
 # INFO: test the dataset

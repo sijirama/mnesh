@@ -49,15 +49,19 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
         type_vec = model.decoder.type_embedding(predicted_type_ids)
         seed = model.projector(session_vec, ctx_vec, type_vec)
 
-        hidden = model.decoder.seed_projection(seed).unsqueeze(0)
+        hidden = model.decoder.seed_projection(seed)
+        hidden = hidden.view(input_ids.size(0), model.decoder.num_layers, model.decoder.hidden_size).transpose(0, 1).contiguous()
         generated = [bos_id]
 
         for _ in range(32):
             current = torch.tensor([[generated[-1]]], dtype=torch.long, device=DEVICE)
             token_embedded = model.decoder.embedding(current)
-            type_embedded = model.decoder.type_embedding(predicted_type_ids).unsqueeze(1)
-            embedded = torch.cat([token_embedded, type_embedded], dim=-1)
-            output, hidden = model.decoder.rnn(embedded, hidden)
+            raw_type_embedded = model.decoder.type_embedding(predicted_type_ids).unsqueeze(1)
+            gate_input = torch.cat([token_embedded, raw_type_embedded], dim=-1)
+            gate = model.decoder.gate(gate_input)
+            type_embedded = model.decoder.type_adapter(raw_type_embedded)
+            fused = token_embedded + gate * type_embedded
+            output, hidden = model.decoder.rnn(fused, hidden)
             logits = model.decoder.output_projection(output.squeeze(1))
 
             logits[0, pad_id] = -float("inf")

@@ -13,6 +13,7 @@ CFG = {
     "max_cmd_len":      32,
     "context_dim":      16 * 5,  # 80
     "dropout":          0.2,
+    "decoder_layers":   2,
 }
 
 OS_CLASSES          = 2
@@ -116,24 +117,38 @@ class MneshContextProjector(nn.Module):
 class MneshDecoder(nn.Module):
     def __init__(self, cfg):
         super().__init__()
+        self.hidden_size = cfg["outer_hidden"]
+        self.num_layers = cfg["decoder_layers"]
         self.embedding = nn.Embedding(cfg["vocab_size"], cfg["token_emb_dim"], padding_idx=0)
         self.type_embedding = nn.Embedding(CMD_TYPE_CLASSES, cfg["type_emb_dim"])
-        self.rnn = nn.GRU(
-            cfg["token_emb_dim"] + cfg["type_emb_dim"],
-            cfg["outer_hidden"],
-            batch_first=True
+        self.type_adapter = nn.Linear(cfg["type_emb_dim"], cfg["token_emb_dim"])
+        self.gate = nn.Sequential(
+            nn.Linear(cfg["token_emb_dim"] + cfg["type_emb_dim"], cfg["token_emb_dim"]),
+            nn.Sigmoid(),
         )
-        self.seed_projection = nn.Linear(cfg["outer_hidden"], cfg["outer_hidden"])
+        self.rnn = nn.GRU(
+            cfg["token_emb_dim"],
+            cfg["outer_hidden"],
+            num_layers=self.num_layers,
+            batch_first=True
+            ,
+            dropout=cfg["dropout"] if self.num_layers > 1 else 0.0
+        )
+        self.seed_projection = nn.Linear(cfg["outer_hidden"], cfg["outer_hidden"] * self.num_layers)
         self.output_projection = nn.Linear(cfg["outer_hidden"], cfg["vocab_size"])
         self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, target_ids, seed, cmd_type_ids):
         token_embedded = self.dropout(self.embedding(target_ids))
-        type_embedded = self.type_embedding(cmd_type_ids).unsqueeze(1)
-        type_embedded = type_embedded.expand(-1, target_ids.size(1), -1)
-        embedded = torch.cat([token_embedded, type_embedded], dim=-1)
-        h0 = self.seed_projection(seed).unsqueeze(0)
-        output, _ = self.rnn(embedded, h0)
+        raw_type_embedded = self.type_embedding(cmd_type_ids).unsqueeze(1)
+        raw_type_embedded = raw_type_embedded.expand(-1, target_ids.size(1), -1)
+        gate_input = torch.cat([token_embedded, raw_type_embedded], dim=-1)
+        gate = self.gate(gate_input)
+        type_embedded = self.type_adapter(raw_type_embedded)
+        fused = token_embedded + gate * type_embedded
+        h0 = self.seed_projection(seed)
+        h0 = h0.view(target_ids.size(0), self.num_layers, self.hidden_size).transpose(0, 1).contiguous()
+        output, _ = self.rnn(fused, h0)
         logits = self.output_projection(output)
         return logits
 
