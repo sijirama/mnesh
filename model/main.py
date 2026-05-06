@@ -94,6 +94,26 @@ class MneshAttentionPool(nn.Module):
         return pooled, weights
 
 
+class MneshSessionRefiner(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        hidden_dim = cfg["outer_hidden"] * 2
+        self.linear1 = nn.Linear(hidden_dim, hidden_dim)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(cfg["dropout"])
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.layer_norm = nn.LayerNorm(hidden_dim)
+
+    def forward(self, x):
+        residual = x
+        out = self.linear1(x)
+        out = self.activation(out)
+        out = self.dropout(out)
+        out = self.linear2(out)
+        out = self.dropout(out)
+        return self.layer_norm(residual + out)
+
+
 class MneshContextProjector(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -151,6 +171,7 @@ class MneshModel(nn.Module):
         self.inner_gru  = MneshInnerGRU(cfg)
         self.outer_gru  = MneshOutterGRU(cfg)
         self.attention_pool = MneshAttentionPool(cfg)
+        self.session_refiner = MneshSessionRefiner(cfg)
         self.projector  = MneshContextProjector(cfg)
         self.decoder    = MneshDecoder(cfg)
         self.cmd_type_head = MneshCmdTypeHead(cfg)
@@ -160,6 +181,7 @@ class MneshModel(nn.Module):
         cmd_vecs = self.inner_gru(tok_emb, input_ids)
         outer_outputs = self.outer_gru(cmd_vecs)
         session_vec, _ = self.attention_pool(outer_outputs)
+        session_vec = self.session_refiner(session_vec)
         seed = self.projector(session_vec, ctx_vec)
         logits = self.decoder(target_ids, seed)
         cmd_type_logits = self.cmd_type_head(session_vec)
