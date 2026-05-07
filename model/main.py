@@ -79,13 +79,10 @@ class MneshOutterGRU(nn.Module):
         self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, x):
-        outputs, hidden = self.rnn(x)
+        outputs, _ = self.rnn(x)
         outputs = self.layer_norm(outputs)
         outputs = self.dropout(outputs)
-        session_vec = torch.cat([hidden[0], hidden[1]], dim=-1)
-        session_vec = self.layer_norm(session_vec)
-        session_vec = self.dropout(session_vec)
-        return outputs, session_vec
+        return outputs
 
 
 class MneshAttentionPool(nn.Module):
@@ -178,7 +175,8 @@ class MneshModel(nn.Module):
     def forward(self, input_ids, context, target_ids, cmd_type_ids):
         tok_emb, ctx_vec = self.embedding(input_ids, context)
         cmd_vecs = self.inner_gru(tok_emb, input_ids)
-        _, session_vec = self.outer_gru(cmd_vecs)
+        outer_outputs = self.outer_gru(cmd_vecs)
+        session_vec = outer_outputs.mean(dim=1)
         type_vec = self.decoder.type_embedding(cmd_type_ids)
         seed = self.projector(session_vec, ctx_vec, type_vec)
         logits = self.decoder(target_ids, seed, cmd_type_ids)

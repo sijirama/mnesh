@@ -39,7 +39,8 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
     with torch.no_grad():
         tok_emb, ctx_vec = model.embedding(input_ids, context)
         cmd_vecs = model.inner_gru(tok_emb, input_ids)
-        _, session_vec = model.outer_gru(cmd_vecs)
+        outer_outputs = model.outer_gru(cmd_vecs)
+        session_vec = outer_outputs.mean(dim=1)
 
         type_logits = model.cmd_type_head(session_vec)
         type_probs = torch.softmax(type_logits, dim=-1)
