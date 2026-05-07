@@ -101,8 +101,7 @@ with torch.no_grad():
     # encoder pass
     tok_emb, ctx_vec = model.embedding(input_ids, context)
     cmd_vecs    = model.inner_gru(tok_emb, input_ids)
-    outer_outputs = model.outer_gru(cmd_vecs)
-    session_vec, attention_weights = model.attention_pool(outer_outputs)
+    _, session_vec = model.outer_gru(cmd_vecs)
     cmd_type_logits = model.cmd_type_head(session_vec)
     predicted_type = cmd_type_logits.argmax(dim=-1).item()
     predicted_type_ids = torch.tensor([predicted_type], dtype=torch.long, device=DEVICE)
@@ -115,7 +114,6 @@ with torch.no_grad():
     max_tokens = 32
 
     print(f"predicted cmd_type: {CMD_TYPE_NAMES[predicted_type]}")
-    print("attention weights:", [round(w, 4) for w in attention_weights[0, :, 0].tolist()])
 
     for step in range(max_tokens):
         current_token = torch.tensor([[generated[-1]]], dtype=torch.long).to(DEVICE)

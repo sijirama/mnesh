@@ -125,7 +125,7 @@ def evaluate_cmd_type_accuracy(model, loader, device):
             total += target_cmd_types.size(0)
     return correct / total if total > 0 else 0.0
 
-def notify(title, message, level="info", event="completed", best_val_loss=0, step=0):
+def notify(title, message, level="info", event="completed", best_val_loss=0, step=0, epoch=None, type_acc=None):
     token = os.environ.get("BEACON_TOKEN", "")
     if not token:
         print("[beacon] no token set, skipping")
@@ -145,10 +145,17 @@ def notify(title, message, level="info", event="completed", best_val_loss=0, ste
                 "level": level,
                 "channel": "email",
                 "metadata": {
+                    "model_version": MODEL_VERSION,
                     "best_val_loss": best_val_loss,
                     "total_steps": step,
                     "epochs": EPOCHS,
+                    "epoch": epoch,
                     "batch_size": BATCH_SIZE,
+                    "learning_rate": LEARNING_RATE,
+                    "decoder_layers": CFG["decoder_layers"],
+                    "type_emb_dim": CFG["type_emb_dim"],
+                    "dropout": CFG["dropout"],
+                    "type_acc": type_acc,
                 }
             }
         )
@@ -241,7 +248,8 @@ for epoch in range(EPOCHS):
         level="info",
         event="epoch_completed",
         best_val_loss=best_val_loss,
-        step=step
+        step=step,
+        epoch=epoch + 1
     )
 
 print("training complete")
@@ -252,7 +260,8 @@ notify(
     level="info",
     event="completed",
     best_val_loss=best_val_loss,
-    step=step
+    step=step,
+    epoch=EPOCHS
 )
 
 # generate run report
