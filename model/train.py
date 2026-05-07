@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -91,6 +92,12 @@ print(f"model version:    {MODEL_VERSION}")
 
 # ── helpers ──────────────────────────────────────────────
 
+def format_duration(seconds):
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
 def evaluate(model, loader, criterion, device):
     model.eval()
     total_loss, total_steps = 0, 0
@@ -125,7 +132,17 @@ def evaluate_cmd_type_accuracy(model, loader, device):
             total += target_cmd_types.size(0)
     return correct / total if total > 0 else 0.0
 
-def notify(title, message, level="info", event="completed", best_val_loss=0, step=0, epoch=None, type_acc=None):
+def notify(
+    title,
+    message,
+    level="info",
+    event="completed",
+    best_val_loss=0,
+    step=0,
+    epoch=None,
+    type_acc=None,
+    duration_seconds=None,
+):
     token = os.environ.get("BEACON_TOKEN", "")
     if not token:
         print("[beacon] no token set, skipping")
@@ -156,6 +173,8 @@ def notify(title, message, level="info", event="completed", best_val_loss=0, ste
                     "type_emb_dim": CFG["type_emb_dim"],
                     "dropout": CFG["dropout"],
                     "type_acc": type_acc,
+                    "duration_seconds": duration_seconds,
+                    "duration_hms": format_duration(duration_seconds) if duration_seconds is not None else None,
                 }
             }
         )
@@ -185,6 +204,7 @@ def load_checkpoint(path, model, optimizer):
 step = 0
 loss = torch.tensor(0.0)
 best_val_loss = float("inf")
+train_start_time = time.time()
 
 for epoch in range(EPOCHS):
     model.train()
@@ -215,18 +235,20 @@ for epoch in range(EPOCHS):
 
         if step % 100 == 0:
             lr = scheduler.get_last_lr()[0]
+            elapsed = time.time() - train_start_time
             print(
                 f"epoch {epoch+1} | step {step} | loss {loss.item():.4f} "
                 f"| cmd {cmd_loss.item():.4f} | type {type_loss.item():.4f} "
-                f"| alpha {alpha:.2f} | lr {lr:.6f}"
+                f"| alpha {alpha:.2f} | lr {lr:.6f} | elapsed {format_duration(elapsed)}"
             )
 
         if step % EVAL_EVERY == 0 and step > 0:
             val_loss = evaluate(model, val_loader, criterion, DEVICE)
             type_acc = evaluate_cmd_type_accuracy(model, val_loader, DEVICE)
+            elapsed = time.time() - train_start_time
             print(
                 f"epoch {epoch+1} | step {step} | train {loss.item():.4f} "
-                f"| val {val_loss:.4f} | type_acc {type_acc:.4f}"
+                f"| val {val_loss:.4f} | type_acc {type_acc:.4f} | elapsed {format_duration(elapsed)}"
             )
 
             # save best model
@@ -241,27 +263,37 @@ for epoch in range(EPOCHS):
 
     # save end of epoch checkpoint
     save_checkpoint(model, optimizer, epoch, step, loss.item(), f"checkpoints/mnesh_epoch_{epoch+1}.pt")
-    print(f"epoch {epoch+1} complete")
+    elapsed = time.time() - train_start_time
+    print(f"epoch {epoch+1} complete | elapsed {format_duration(elapsed)}")
     notify(
         title=f"mnesh epoch {epoch+1} complete",
-        message=f"epoch {epoch+1}/{EPOCHS} finished at step {step} with train loss {loss.item():.4f}",
+        message=(
+            f"epoch {epoch+1}/{EPOCHS} finished at step {step} "
+            f"with train loss {loss.item():.4f} in {format_duration(elapsed)}"
+        ),
         level="info",
         event="epoch_completed",
         best_val_loss=best_val_loss,
         step=step,
-        epoch=epoch + 1
+        epoch=epoch + 1,
+        duration_seconds=elapsed,
     )
 
 print("training complete")
+total_duration = time.time() - train_start_time
 
 notify(
     title="mnesh training complete",
-    message=f"4 epochs done. best val loss: {best_val_loss:.4f} at step {step}",
+    message=(
+        f"4 epochs done. best val loss: {best_val_loss:.4f} "
+        f"at step {step} in {format_duration(total_duration)}"
+    ),
     level="info",
     event="completed",
     best_val_loss=best_val_loss,
     step=step,
-    epoch=EPOCHS
+    epoch=EPOCHS,
+    duration_seconds=total_duration,
 )
 
 # generate run report
@@ -277,6 +309,8 @@ report = {
     "model_version":   MODEL_VERSION,
     "cfg":             CFG,
     "final_train_loss": loss.item(),
+    "train_duration_seconds": total_duration,
+    "train_duration_hms": format_duration(total_duration),
     "checkpoints_saved": os.listdir("checkpoints") if os.path.exists("checkpoints") else [],
 }
 
@@ -290,6 +324,7 @@ print(f"timestamp:        {report['timestamp']}")
 print(f"total steps:      {report['total_steps']:,}")
 print(f"best val loss:    {report['best_val_loss']:.4f}")
 print(f"final train loss: {report['final_train_loss']:.4f}")
+print(f"train duration:   {report['train_duration_hms']}")
 print(f"report saved →    {report_path}")
 print("────────────────────────────────────────────\n")
 
