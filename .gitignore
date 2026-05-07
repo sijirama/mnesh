@@ -15,3 +15,9 @@ venv.bak/
 REMOTE_INFO
 .codex
 TODO.md
+
+result/
+
+results/
+
+checkpoints/
