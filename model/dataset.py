@@ -25,6 +25,16 @@ NOISY_COMMANDS = {
     "echo", "whoami", "date",
 }
 
+ECOSYSTEM_PATTERNS = {
+    "node": ["node_modules", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock", "vite.config", "next.config", "npm ", "pnpm ", "npx ", "yarn "],
+    "python": ["venv", ".venv", "requirements.txt", "pipfile", "setup.py", "manage.py", "pyproject.toml", "python", "pip ", "pytest", "jupyter", "conda", "dbt ", "airflow "],
+    "go": ["go.mod", "go.sum", "main.go", "go build", "go test", "go run", "go fmt", "go vet"],
+    "rust": ["cargo.toml", "cargo.lock", "cargo ", "rustc", "diesel "],
+    "infra": ["docker-compose", "docker compose", "docker ", "k8s", "kubernetes", "kubectl ", "terraform ", ".kube", "helm "],
+    "ruby": ["gemfile", "rakefile", "bundle exec", "rails "],
+    "db": ["postgres", "psql", "mysql", "mongodb", "mongosh", "redis", "sqlite", "pg_dump", "sql"],
+}
+
 class MneshDatasetV1(Dataset):
     def __init__(self, split="train"):
         self.max_cmd_len = 32
@@ -39,8 +49,12 @@ class MneshDatasetV1(Dataset):
         }
         self.cmd_type_map = {
             "filesystem": 0, "git": 1, "process": 2, "network": 3,
-            "package": 4, "docker": 5, "k8s": 6, "python": 7,
-            "node": 8, "system": 9, "text_processing": 10, "ssh": 11, "misc": 12
+            "package": 4, "container": 5, "python": 6, "node": 7,
+            "system": 8, "text_processing": 9, "misc": 10
+        }
+        self.ecosystem_map = {
+            "node": 0, "python": 1, "go": 2, "rust": 3,
+            "infra": 4, "ruby": 5, "db": 6, "system": 7, "misc": 8
         }
 
         # load tokenizer
@@ -148,13 +162,46 @@ class MneshDatasetV1(Dataset):
         ids = ids + [0] * (self.max_cmd_len - len(ids))
         return ids
 
+    def normalize_cmd_type(self, cmd_type: str) -> str:
+        if cmd_type in {"docker", "k8s"}:
+            return "container"
+        if cmd_type in {"system", "ssh"}:
+            return "system"
+        if cmd_type not in self.cmd_type_map:
+            return "misc"
+        return cmd_type
+
+    def detect_ecosystem(self, row) -> str:
+        combined = " ".join([
+            str(row.get("cwd", "")),
+            str(row.get("git_branch", "")),
+            str(row.get("cmd", "")),
+        ]).lower()
+        for ecosystem, patterns in ECOSYSTEM_PATTERNS.items():
+            if any(pattern in combined for pattern in patterns):
+                return ecosystem
+
+        session_ctx = row.get("session_context", "")
+        if session_ctx == "frontend_dev":
+            return "node"
+        if session_ctx in {"backend_dev", "data_science"}:
+            return "python"
+        if session_ctx in {"devops", "deployment"}:
+            return "infra"
+        if session_ctx in {"system_admin", "debugging"}:
+            return "system"
+        return "misc"
+
     def _encode_context(self, row) -> list[int]:
+        normalized_cmd_type = self.normalize_cmd_type(row["cmd_type"])
+        ecosystem = self.detect_ecosystem(row)
         return [
             self.os_map.get(row["os"], 0),
             self.shell_map.get(row["shell"], 0),
             self.session_context_map.get(row["session_context"], 0),
-            self.cmd_type_map.get(row["cmd_type"], 0),
+            self.cmd_type_map.get(normalized_cmd_type, 0),
             1 if row["git_enabled"] else 0,
+            self.ecosystem_map.get(ecosystem, self.ecosystem_map["misc"]),
         ]
 
     def __getitem__(self, idx):
@@ -164,7 +211,7 @@ class MneshDatasetV1(Dataset):
         input_tensor   = torch.tensor(input_ids, dtype=torch.long)
         context_tensor = torch.tensor(self._encode_context(window[-1]), dtype=torch.long)
         target_tensor  = torch.tensor(self._tokenize_target(target["cmd"]), dtype=torch.long)
-        target_cmd_type = self.cmd_type_map.get(target["cmd_type"], 0)
+        target_cmd_type = self.cmd_type_map.get(self.normalize_cmd_type(target["cmd_type"]), 0)
         target_cmd = target["cmd"].strip()
         weight = 0.1 if target_cmd in NOISY_COMMANDS else 1.0
 

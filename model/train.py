@@ -36,14 +36,14 @@ val_loader    = DataLoader(val_dataset,   batch_size=BATCH_SIZE, shuffle=False, 
 model         = MneshModel(CFG).to(DEVICE)
 
 CMD_TYPE_NAMES = [
-    "filesystem", "git", "process", "network", "package", "docker",
-    "k8s", "python", "node", "system", "text_processing", "ssh", "misc",
+    "filesystem", "git", "process", "network", "package", "container",
+    "python", "node", "system", "text_processing", "misc",
 ]
 
 
 def build_cmd_type_class_weights(dataset):
     target_types = [
-        window_target["cmd_type"]
+        dataset.normalize_cmd_type(window_target["cmd_type"])
         for _, window_target in dataset._get_windows()
     ]
     counts = Counter(target_types)

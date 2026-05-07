@@ -6,8 +6,8 @@ from model.main import CFG, MneshModel
 
 DEVICE = "cpu"
 CMD_TYPE_NAMES = [
-    "filesystem", "git", "process", "network", "package", "docker",
-    "k8s", "python", "node", "system", "text_processing", "ssh", "misc",
+    "filesystem", "git", "process", "network", "package", "container",
+    "python", "node", "system", "text_processing", "misc",
 ]
 
 
@@ -39,8 +39,7 @@ def run_session(model, sp, input_ids, context, temp=0.8, top_k=5, rep_pen=2.0):
     with torch.no_grad():
         tok_emb, ctx_vec = model.embedding(input_ids, context)
         cmd_vecs = model.inner_gru(tok_emb, input_ids)
-        outer_outputs = model.outer_gru(cmd_vecs)
-        session_vec = outer_outputs.mean(dim=1)
+        _, session_vec = model.outer_gru(cmd_vecs)
 
         type_logits = model.cmd_type_head(session_vec)
         type_probs = torch.softmax(type_logits, dim=-1)
@@ -100,30 +99,30 @@ def main():
             "git status", "git add .", "git diff", "git log --oneline", "git branch",
             "git stash", "git pull origin main", "git checkout feat/auth",
             "git rebase main", "git push",
-        ], [1, 0, 0, 1, 1]),
+        ], [1, 0, 0, 1, 1, 1]),
         ("docker", [
             "docker ps", "docker images", "docker build -t app .", "docker run -d app",
             "docker logs app", "docker exec -it app bash", "docker stop app",
             "docker rm app", "docker pull nginx", "docker compose up",
-        ], [0, 1, 2, 5, 0]),
+        ], [0, 1, 2, 5, 0, 4]),
         ("python", [
             "python3 -m pytest tests/", "python3 manage.py migrate",
             "python3 -m pip install -r requirements.txt", "python3 app.py",
             "python3 -m unittest discover", "python3 script.py",
             "python3 -m venv venv", "python3 setup.py install",
             "python3 -m pip freeze", "python3 -m http.server 8000",
-        ], [0, 0, 3, 7, 0]),
+        ], [0, 0, 3, 6, 0, 1]),
         ("sysadmin", [
             "ssh root@server1", "uptime", "df -h", "top -bn1 | head -20",
             "systemctl status nginx", "journalctl -u nginx -n 50",
             "netstat -tlnp", "cat /var/log/syslog | tail -20",
             "ps aux | grep python", "free -m",
-        ], [0, 1, 7, 11, 0]),
+        ], [0, 1, 7, 8, 0, 7]),
         ("frontend", [
             "cd ~/projects/web-app", "npm install", "npm run dev", "npm run build",
             "npm test", "npm run lint", "git status", "git add .",
             "git commit -m \"fix: button styling\"", "git push origin main",
-        ], [1, 0, 1, 1, 1]),
+        ], [1, 0, 1, 1, 1, 0]),
     ]
 
     for name, cmds, ctx in sessions:

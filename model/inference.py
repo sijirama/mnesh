@@ -73,6 +73,7 @@ context = torch.tensor([[
     0,  # session_context: backend_dev
     1,  # cmd_type: git
     1,  # git_enabled: true
+    1,  # ecosystem: python
 ]], dtype=torch.long).to(DEVICE)
 
 # tokenise and pad each command
@@ -92,8 +93,8 @@ BOS_ID = sp.piece_to_id("<s>")
 EOS_ID = sp.piece_to_id("</s>")
 REPETITION_PENALTY = 2.0
 CMD_TYPE_NAMES = [
-    "filesystem", "git", "process", "network", "package", "docker",
-    "k8s", "python", "node", "system", "text_processing", "ssh", "misc",
+    "filesystem", "git", "process", "network", "package", "container",
+    "python", "node", "system", "text_processing", "misc",
 ]
 
 # generate next command
@@ -101,8 +102,7 @@ with torch.no_grad():
     # encoder pass
     tok_emb, ctx_vec = model.embedding(input_ids, context)
     cmd_vecs    = model.inner_gru(tok_emb, input_ids)
-    outer_outputs = model.outer_gru(cmd_vecs)
-    session_vec = outer_outputs.mean(dim=1)
+    _, session_vec = model.outer_gru(cmd_vecs)
     cmd_type_logits = model.cmd_type_head(session_vec)
     predicted_type = cmd_type_logits.argmax(dim=-1).item()
     predicted_type_ids = torch.tensor([predicted_type], dtype=torch.long, device=DEVICE)

@@ -11,7 +11,7 @@ CFG = {
     "outer_hidden":     512,
     "window_size":      10,
     "max_cmd_len":      32,
-    "context_dim":      16 * 5,  # 80
+    "context_dim":      16 * 6,  # 96
     "dropout":          0.2,
     "decoder_layers":   2,
 }
@@ -19,8 +19,9 @@ CFG = {
 OS_CLASSES          = 2
 SHELL_CLASSES       = 3
 SESSION_CTX_CLASSES = 9
-CMD_TYPE_CLASSES    = 13
+CMD_TYPE_CLASSES    = 11
 GIT_CLASSES         = 2
+ECOSYSTEM_CLASSES   = 9
 
 class MneshEmbedding(nn.Module):
     def __init__(self, cfg):
@@ -31,6 +32,7 @@ class MneshEmbedding(nn.Module):
         self.ctx_emb   = nn.Embedding(SESSION_CTX_CLASSES, cfg["context_emb_dim"])
         self.cmd_emb   = nn.Embedding(CMD_TYPE_CLASSES, cfg["context_emb_dim"])
         self.git_emb   = nn.Embedding(GIT_CLASSES, cfg["context_emb_dim"])
+        self.eco_emb   = nn.Embedding(ECOSYSTEM_CLASSES, cfg["context_emb_dim"])
         self.dropout   = nn.Dropout(cfg["dropout"])
 
     def forward(self, token_ids, context):
@@ -40,7 +42,8 @@ class MneshEmbedding(nn.Module):
         ctx_e = self.ctx_emb(context[:, 2])
         cmd_e = self.cmd_emb(context[:, 3])
         git_e = self.git_emb(context[:, 4])
-        ctx_vec = torch.cat([os_e, sh_e, ctx_e, cmd_e, git_e], dim=-1)
+        eco_e = self.eco_emb(context[:, 5])
+        ctx_vec = torch.cat([os_e, sh_e, ctx_e, cmd_e, git_e, eco_e], dim=-1)
         return tok, ctx_vec
 
 
@@ -79,21 +82,13 @@ class MneshOutterGRU(nn.Module):
         self.dropout = nn.Dropout(cfg["dropout"])
 
     def forward(self, x):
-        outputs, _ = self.rnn(x)
+        outputs, hidden = self.rnn(x)
         outputs = self.layer_norm(outputs)
         outputs = self.dropout(outputs)
-        return outputs
-
-
-class MneshAttentionPool(nn.Module):
-    def __init__(self, cfg):
-        super().__init__()
-        self.score = nn.Linear(cfg["outer_hidden"] * 2, 1)
-
-    def forward(self, x):
-        weights = torch.softmax(self.score(x), dim=1)
-        pooled = torch.sum(weights * x, dim=1)
-        return pooled, weights
+        session_vec = torch.cat([hidden[0], hidden[1]], dim=-1)
+        session_vec = self.layer_norm(session_vec)
+        session_vec = self.dropout(session_vec)
+        return outputs, session_vec
 
 
 class MneshContextProjector(nn.Module):
@@ -175,8 +170,7 @@ class MneshModel(nn.Module):
     def forward(self, input_ids, context, target_ids, cmd_type_ids):
         tok_emb, ctx_vec = self.embedding(input_ids, context)
         cmd_vecs = self.inner_gru(tok_emb, input_ids)
-        outer_outputs = self.outer_gru(cmd_vecs)
-        session_vec = outer_outputs.mean(dim=1)
+        _, session_vec = self.outer_gru(cmd_vecs)
         type_vec = self.decoder.type_embedding(cmd_type_ids)
         seed = self.projector(session_vec, ctx_vec, type_vec)
         logits = self.decoder(target_ids, seed, cmd_type_ids)
