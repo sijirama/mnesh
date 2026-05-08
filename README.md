@@ -34,6 +34,7 @@ go run ./cmd/mnesh predict --model v5 --limit 10
 go run ./cmd/mnesh hook zsh
 go run ./cmd/mnesh hook --write zsh
 go run ./cmd/mnesh install-hook zsh
+bash ./mnesh_uninstall
 ```
 
 `mnesh init` creates `~/.mnesh/`, writes a default config, initializes sqlite, writes the zsh/bash hook files into `~/.mnesh/hooks/`, and downloads the published `v5` and `v6` model bundles from hugging face.
@@ -48,6 +49,12 @@ go run ./cmd/mnesh install-hook bash
 that appends one safe `source ~/.mnesh/hooks/...` line into your shell rc file.
 
 the hook records commands into `~/.mnesh/data/commands.db` with a per-shell session id, cwd, exit code, host, and best-effort git branch.
+
+to fully reset a local install, run:
+
+```bash
+bash ./mnesh_uninstall
+```
 
 ## useful resources
 
