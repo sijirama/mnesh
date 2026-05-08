@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sijirama/mnesh/internal/hooks"
@@ -65,36 +66,58 @@ func Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	fmt.Println("1/7 creating local directories...")
 	if err := ensureDirs(paths); err != nil {
 		return err
 	}
+	fmt.Printf("   ok: %s\n", paths.Root)
+
+	fmt.Println("2/7 preparing sqlite database...")
 	if err := touch(paths.DBPath); err != nil {
 		return fmt.Errorf("create commands db placeholder: %w", err)
 	}
 	if err := store.EnsureSchema(ctx, paths.DBPath); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)
 	}
+	fmt.Printf("   ok: %s\n", paths.DBPath)
+
+	fmt.Println("3/7 writing config...")
 	if err := writeDefaultConfig(paths); err != nil {
 		return err
 	}
+	fmt.Printf("   ok: %s\n", paths.ConfigPath)
+
+	fmt.Println("4/7 setting active model...")
 	if err := os.WriteFile(paths.ActiveModelPath, []byte("v5\n"), 0o644); err != nil {
 		return fmt.Errorf("write active model marker: %w", err)
 	}
+	fmt.Printf("   ok: %s -> v5\n", paths.ActiveModelPath)
+
+	fmt.Println("5/7 writing shell hook files...")
 	for _, shell := range hooks.SupportedShells() {
 		if _, err := hooks.Write(paths.HooksDir, shell, paths.BinPath); err != nil {
 			return fmt.Errorf("write %s hook: %w", shell, err)
 		}
+		fmt.Printf("   ok: %s/%s\n", paths.HooksDir, hookFileName(shell))
 	}
+
+	fmt.Println("6/7 installing local binary...")
 	if err := installBinary(paths); err != nil {
 		return err
 	}
+	fmt.Printf("   ok: %s\n", paths.BinPath)
 
+	fmt.Printf("7/7 installing model bundles%s...\n", skipNote(opts.SkipDownloads))
 	if !opts.SkipDownloads {
 		for _, spec := range modelCatalog {
+			fmt.Printf("   downloading %s...\n", spec.Name)
 			if err := downloadModelBundle(ctx, paths.ModelsDir, spec); err != nil {
 				return err
 			}
+			fmt.Printf("   ok: %s\n", filepath.Join(paths.ModelsDir, spec.Name))
 		}
+	} else {
+		fmt.Println("   skipped downloads")
 	}
 
 	fmt.Println("mnesh home initialized")
@@ -132,6 +155,42 @@ func Doctor() error {
 			continue
 		}
 		fmt.Printf("%-12s ok      %s\n", check.label, check.path)
+	}
+
+	activeModel := "unknown"
+	if raw, err := os.ReadFile(paths.ActiveModelPath); err == nil {
+		activeModel = strings.TrimSpace(string(raw))
+	}
+	fmt.Printf("%-12s %s\n", "active", activeModel)
+
+	for _, modelName := range []string{"v5", "v6"} {
+		modelPath := filepath.Join(paths.ModelsDir, modelName, "mnesh_best.pt")
+		if _, err := os.Stat(modelPath); err == nil {
+			fmt.Printf("%-12s ok      %s\n", "model:"+modelName, modelPath)
+		} else {
+			fmt.Printf("%-12s missing  %s\n", "model:"+modelName, modelPath)
+		}
+	}
+
+	for _, shell := range hooks.SupportedShells() {
+		rcPath, err := shellRCPath(paths.Root, shell)
+		if err != nil {
+			continue
+		}
+		hookPath := filepath.Join(paths.HooksDir, hookFileName(shell))
+		sourceLine := sourceLineForHook(hookPath)
+		pathLine := pathLineForBin(paths.BinDir)
+		content, readErr := os.ReadFile(rcPath)
+		if readErr != nil {
+			fmt.Printf("%-12s missing  %s\n", shell+":rc", rcPath)
+			continue
+		}
+		text := string(content)
+		if strings.Contains(text, sourceLine) && strings.Contains(text, pathLine) {
+			fmt.Printf("%-12s ok      %s\n", shell+":rc", rcPath)
+		} else {
+			fmt.Printf("%-12s partial %s\n", shell+":rc", rcPath)
+		}
 	}
 	return nil
 }
@@ -299,4 +358,42 @@ func installBinary(paths mneshfs.Paths) error {
 		return fmt.Errorf("move binary into place: %w", err)
 	}
 	return nil
+}
+
+func hookFileName(shell string) string {
+	switch shell {
+	case "zsh":
+		return "mnesh.zsh"
+	case "bash":
+		return "mnesh.bash"
+	default:
+		return shell
+	}
+}
+
+func shellRCPath(root, shell string) (string, error) {
+	home := filepath.Dir(root)
+	switch shell {
+	case "zsh":
+		return filepath.Join(home, ".zshrc"), nil
+	case "bash":
+		return filepath.Join(home, ".bashrc"), nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q", shell)
+	}
+}
+
+func sourceLineForHook(hookPath string) string {
+	return fmt.Sprintf("[[ -f %q ]] && source %q", hookPath, hookPath)
+}
+
+func pathLineForBin(binDir string) string {
+	return fmt.Sprintf("export PATH=%q:$PATH", binDir)
+}
+
+func skipNote(skip bool) string {
+	if skip {
+		return " (skip-downloads)"
+	}
+	return ""
 }

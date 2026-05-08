@@ -312,19 +312,24 @@ func runInstallHook(args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("1/3 writing %s hook file...\n", shell)
 	hookPath, err := hooks.Write(paths.HooksDir, shell, paths.BinPath)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("   ok: %s\n", hookPath)
 	pathLine := pathLineForBin(paths.BinDir)
 	rcPath, err := shellRCPath(paths.Root, shell)
 	if err != nil {
 		return err
 	}
+	fmt.Printf("2/3 updating %s...\n", rcPath)
 	sourceLine := sourceLineForHook(hookPath)
 	existing, _ := os.ReadFile(rcPath)
 	if strings.Contains(string(existing), sourceLine) && strings.Contains(string(existing), pathLine) {
-		fmt.Printf("hook already installed in %s\n", rcPath)
+		fmt.Printf("   ok: hook already installed in %s\n", rcPath)
+		fmt.Println("3/3 shell restart required")
+		fmt.Println("   run: exec zsh")
 		return nil
 	}
 	file, err := os.OpenFile(rcPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -347,7 +352,9 @@ func runInstallHook(args []string) error {
 	if _, err := file.WriteString(block); err != nil {
 		return err
 	}
-	fmt.Printf("installed hook into %s\n", rcPath)
+	fmt.Printf("   ok: installed hook into %s\n", rcPath)
+	fmt.Println("3/3 shell restart required")
+	fmt.Println("   run: exec zsh")
 	return nil
 }
 
