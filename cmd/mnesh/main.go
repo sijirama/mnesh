@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sijirama/mnesh/internal/bootstrap"
+	"github.com/sijirama/mnesh/internal/hooks"
 	"github.com/sijirama/mnesh/internal/mneshfs"
 	"github.com/sijirama/mnesh/internal/store"
 )
@@ -57,6 +58,10 @@ func main() {
 		if err := runPredict(ctx, os.Args[2:]); err != nil {
 			fatal(err)
 		}
+	case "hook":
+		if err := runHook(os.Args[2:]); err != nil {
+			fatal(err)
+		}
 	case "version":
 		fmt.Printf("mnesh %s\n", version)
 	default:
@@ -77,6 +82,7 @@ func usage() {
 	fmt.Println("  mnesh recent [--limit N]")
 	fmt.Println("  mnesh window [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh predict [--model <v5|v6>] [--session-id <id>] [--limit N]")
+	fmt.Println("  mnesh hook <zsh|bash>")
 	fmt.Println("  mnesh version")
 	fmt.Println()
 	fmt.Println("default home:")
@@ -257,6 +263,42 @@ func runPredict(ctx context.Context, args []string) error {
 		return fmt.Errorf("predict worker failed: %w: %s", err, string(out))
 	}
 	fmt.Println(string(out))
+	return nil
+}
+
+func runHook(args []string) error {
+	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
+	write := fs.Bool("write", false, "write hook file into ~/.mnesh/hooks")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: mnesh hook [--write] <zsh|bash>")
+	}
+	shell := fs.Arg(0)
+	body, err := hooks.Render(shell)
+	if err != nil {
+		return err
+	}
+
+	if *write {
+		paths, err := mneshfs.Resolve()
+		if err != nil {
+			return err
+		}
+		ext := shell
+		target := filepath.Join(paths.HooksDir, fmt.Sprintf("mnesh.%s", ext))
+		if err := os.MkdirAll(paths.HooksDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+			return err
+		}
+		fmt.Println(target)
+		return nil
+	}
+
+	fmt.Print(body)
 	return nil
 }
 

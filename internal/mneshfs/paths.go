@@ -12,6 +12,7 @@ type Paths struct {
 	ModelsDir       string
 	LogsDir         string
 	CacheDir        string
+	HooksDir        string
 	ConfigPath      string
 	DBPath          string
 	ActiveModelPath string
@@ -30,6 +31,7 @@ func Resolve() (Paths, error) {
 		ModelsDir:       filepath.Join(root, "models"),
 		LogsDir:         filepath.Join(root, "logs"),
 		CacheDir:        filepath.Join(root, "cache"),
+		HooksDir:        filepath.Join(root, "hooks"),
 		ConfigPath:      filepath.Join(root, "config.json"),
 		DBPath:          filepath.Join(root, "data", "commands.db"),
 		ActiveModelPath: filepath.Join(root, "models", "active"),

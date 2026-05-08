@@ -110,6 +110,7 @@ func Doctor() error {
 		{"models", paths.ModelsDir},
 		{"logs", paths.LogsDir},
 		{"cache", paths.CacheDir},
+		{"hooks", paths.HooksDir},
 		{"active_model", paths.ActiveModelPath},
 	}
 
@@ -149,6 +150,7 @@ func ensureDirs(paths mneshfs.Paths) error {
 		paths.ModelsDir,
 		paths.LogsDir,
 		paths.CacheDir,
+		paths.HooksDir,
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

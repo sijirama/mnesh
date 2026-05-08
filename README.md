@@ -31,9 +31,21 @@ go run ./cmd/mnesh record --cmd "git status" --cwd "$PWD"
 go run ./cmd/mnesh recent --limit 5
 go run ./cmd/mnesh window --limit 10
 go run ./cmd/mnesh predict --model v5 --limit 10
+go run ./cmd/mnesh hook zsh
+go run ./cmd/mnesh hook --write zsh
 ```
 
 `mnesh init` creates `~/.mnesh/`, writes a default config, touches the sqlite path, and downloads the published `v5` and `v6` model bundles from hugging face.
+
+to enable shell capture, print a hook and source it in your shell config:
+
+```bash
+go run ./cmd/mnesh hook zsh
+go run ./cmd/mnesh hook bash
+go run ./cmd/mnesh hook --write zsh
+```
+
+the hook records commands into `~/.mnesh/data/commands.db` with a per-shell session id, cwd, exit code, host, and best-effort git branch.
 
 ## useful resources
 
