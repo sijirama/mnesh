@@ -1,6 +1,14 @@
 package hooks
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+func SupportedShells() []string {
+	return []string{"zsh", "bash"}
+}
 
 func Render(shell string) (string, error) {
 	switch shell {
@@ -11,6 +19,36 @@ func Render(shell string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported shell %q", shell)
 	}
+}
+
+func FileName(shell string) (string, error) {
+	switch shell {
+	case "zsh":
+		return "mnesh.zsh", nil
+	case "bash":
+		return "mnesh.bash", nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q", shell)
+	}
+}
+
+func Write(dir, shell string) (string, error) {
+	body, err := Render(shell)
+	if err != nil {
+		return "", err
+	}
+	name, err := FileName(shell)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	target := filepath.Join(dir, name)
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		return "", err
+	}
+	return target, nil
 }
 
 func zshHook() string {

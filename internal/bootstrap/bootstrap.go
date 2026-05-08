@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sijirama/mnesh/internal/hooks"
 	"github.com/sijirama/mnesh/internal/mneshfs"
 	"github.com/sijirama/mnesh/internal/store"
 )
@@ -77,6 +78,11 @@ func Init(ctx context.Context, opts Options) error {
 	}
 	if err := os.WriteFile(paths.ActiveModelPath, []byte("v5\n"), 0o644); err != nil {
 		return fmt.Errorf("write active model marker: %w", err)
+	}
+	for _, shell := range hooks.SupportedShells() {
+		if _, err := hooks.Write(paths.HooksDir, shell); err != nil {
+			return fmt.Errorf("write %s hook: %w", shell, err)
+		}
 	}
 
 	if !opts.SkipDownloads {

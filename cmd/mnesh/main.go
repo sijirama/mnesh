@@ -62,6 +62,10 @@ func main() {
 		if err := runHook(os.Args[2:]); err != nil {
 			fatal(err)
 		}
+	case "install-hook":
+		if err := runInstallHook(os.Args[2:]); err != nil {
+			fatal(err)
+		}
 	case "version":
 		fmt.Printf("mnesh %s\n", version)
 	default:
@@ -83,6 +87,7 @@ func usage() {
 	fmt.Println("  mnesh window [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh predict [--model <v5|v6>] [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh hook <zsh|bash>")
+	fmt.Println("  mnesh install-hook <zsh|bash>")
 	fmt.Println("  mnesh version")
 	fmt.Println()
 	fmt.Println("default home:")
@@ -302,6 +307,47 @@ func runHook(args []string) error {
 	return nil
 }
 
+func runInstallHook(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: mnesh install-hook <zsh|bash>")
+	}
+	shell := args[0]
+	paths, err := mneshfs.Resolve()
+	if err != nil {
+		return err
+	}
+	hookPath, err := hooks.Write(paths.HooksDir, shell)
+	if err != nil {
+		return err
+	}
+	rcPath, err := shellRCPath(paths.Root, shell)
+	if err != nil {
+		return err
+	}
+	sourceLine := sourceLineForHook(hookPath)
+	existing, _ := os.ReadFile(rcPath)
+	if strings.Contains(string(existing), sourceLine) {
+		fmt.Printf("hook already installed in %s\n", rcPath)
+		return nil
+	}
+	file, err := os.OpenFile(rcPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		if _, err := file.WriteString("\n"); err != nil {
+			return err
+		}
+	}
+	block := fmt.Sprintf("\n# mnesh shell hook\n%s\n", sourceLine)
+	if _, err := file.WriteString(block); err != nil {
+		return err
+	}
+	fmt.Printf("installed hook into %s\n", rcPath)
+	return nil
+}
+
 func hostOrLocal() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -334,4 +380,20 @@ func resolvePython() string {
 		return filepath.Join(".venv", "bin", "python3")
 	}
 	return "python3"
+}
+
+func shellRCPath(root, shell string) (string, error) {
+	home := filepath.Dir(root)
+	switch shell {
+	case "zsh":
+		return filepath.Join(home, ".zshrc"), nil
+	case "bash":
+		return filepath.Join(home, ".bashrc"), nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q", shell)
+	}
+}
+
+func sourceLineForHook(hookPath string) string {
+	return fmt.Sprintf("[[ -f %q ]] && source %q", hookPath, hookPath)
 }
