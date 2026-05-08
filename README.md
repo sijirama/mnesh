@@ -30,6 +30,7 @@ go run ./cmd/mnesh daemon
 go run ./cmd/mnesh record --cmd "git status" --cwd "$PWD"
 go run ./cmd/mnesh recent --limit 5
 go run ./cmd/mnesh window --limit 10
+go run ./cmd/mnesh predict --model v5 --limit 10
 ```
 
 `mnesh init` creates `~/.mnesh/`, writes a default config, touches the sqlite path, and downloads the published `v5` and `v6` model bundles from hugging face.

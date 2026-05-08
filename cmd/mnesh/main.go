@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sijirama/mnesh/internal/bootstrap"
@@ -50,6 +53,10 @@ func main() {
 		if err := runWindow(ctx, os.Args[2:]); err != nil {
 			fatal(err)
 		}
+	case "predict":
+		if err := runPredict(ctx, os.Args[2:]); err != nil {
+			fatal(err)
+		}
 	case "version":
 		fmt.Printf("mnesh %s\n", version)
 	default:
@@ -69,6 +76,7 @@ func usage() {
 	fmt.Println("  mnesh record --cmd <command> [--cwd <dir>] [--shell <name>] [--session-id <id>]")
 	fmt.Println("  mnesh recent [--limit N]")
 	fmt.Println("  mnesh window [--session-id <id>] [--limit N]")
+	fmt.Println("  mnesh predict [--model <v5|v6>] [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh version")
 	fmt.Println()
 	fmt.Println("default home:")
@@ -192,10 +200,96 @@ func runWindow(ctx context.Context, args []string) error {
 	return nil
 }
 
+func runPredict(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("predict", flag.ContinueOnError)
+	modelName := fs.String("model", "", "model name, e.g. v5 or v6")
+	sessionID := fs.String("session-id", "", "session identifier")
+	limit := fs.Int("limit", 10, "number of session commands")
+	maxTokens := fs.Int("max-tokens", 32, "maximum generated tokens")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	paths, err := mneshfs.Resolve()
+	if err != nil {
+		return err
+	}
+
+	id := *sessionID
+	if id == "" {
+		id, err = store.LatestSessionID(ctx, paths.DBPath)
+		if err != nil {
+			return err
+		}
+		if id == "" {
+			return fmt.Errorf("no recorded sessions available")
+		}
+	}
+
+	events, err := store.ListSessionWindow(ctx, paths.DBPath, id, *limit)
+	if err != nil {
+		return err
+	}
+	if len(events) == 0 {
+		return fmt.Errorf("no events found for session %s", id)
+	}
+
+	selectedModel, err := resolveModel(paths, *modelName)
+	if err != nil {
+		return err
+	}
+
+	workerPath := filepath.Join("scripts", "predict_worker.py")
+	payload := map[string]any{
+		"model_dir":  filepath.Join(paths.ModelsDir, selectedModel),
+		"events":     events,
+		"max_tokens": *maxTokens,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.CommandContext(ctx, resolvePython(), workerPath, string(body))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("predict worker failed: %w: %s", err, string(out))
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
 func hostOrLocal() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
 		return "localhost"
 	}
 	return host
+}
+
+func resolveModel(paths mneshfs.Paths, requested string) (string, error) {
+	if requested != "" {
+		return requested, nil
+	}
+
+	raw, err := os.ReadFile(paths.ActiveModelPath)
+	if err != nil {
+		return "", fmt.Errorf("read active model: %w", err)
+	}
+	modelName := strings.TrimSpace(string(raw))
+	if modelName == "" {
+		return "", fmt.Errorf("active model marker is empty")
+	}
+	return modelName, nil
+}
+
+func resolvePython() string {
+	if custom := strings.TrimSpace(os.Getenv("MNESH_PYTHON")); custom != "" {
+		return custom
+	}
+	if _, err := os.Stat(filepath.Join(".venv", "bin", "python3")); err == nil {
+		return filepath.Join(".venv", "bin", "python3")
+	}
+	return "python3"
 }
