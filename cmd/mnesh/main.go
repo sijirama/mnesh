@@ -281,22 +281,18 @@ func runHook(args []string) error {
 		return fmt.Errorf("usage: mnesh hook [--write] <zsh|bash>")
 	}
 	shell := fs.Arg(0)
-	body, err := hooks.Render(shell)
+	paths, err := mneshfs.Resolve()
+	if err != nil {
+		return err
+	}
+	body, err := hooks.Render(shell, paths.BinPath)
 	if err != nil {
 		return err
 	}
 
 	if *write {
-		paths, err := mneshfs.Resolve()
+		target, err := hooks.Write(paths.HooksDir, shell, paths.BinPath)
 		if err != nil {
-			return err
-		}
-		ext := shell
-		target := filepath.Join(paths.HooksDir, fmt.Sprintf("mnesh.%s", ext))
-		if err := os.MkdirAll(paths.HooksDir, 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
 			return err
 		}
 		fmt.Println(target)
@@ -316,17 +312,18 @@ func runInstallHook(args []string) error {
 	if err != nil {
 		return err
 	}
-	hookPath, err := hooks.Write(paths.HooksDir, shell)
+	hookPath, err := hooks.Write(paths.HooksDir, shell, paths.BinPath)
 	if err != nil {
 		return err
 	}
+	pathLine := pathLineForBin(paths.BinDir)
 	rcPath, err := shellRCPath(paths.Root, shell)
 	if err != nil {
 		return err
 	}
 	sourceLine := sourceLineForHook(hookPath)
 	existing, _ := os.ReadFile(rcPath)
-	if strings.Contains(string(existing), sourceLine) {
+	if strings.Contains(string(existing), sourceLine) && strings.Contains(string(existing), pathLine) {
 		fmt.Printf("hook already installed in %s\n", rcPath)
 		return nil
 	}
@@ -340,7 +337,13 @@ func runInstallHook(args []string) error {
 			return err
 		}
 	}
-	block := fmt.Sprintf("\n# mnesh shell hook\n%s\n", sourceLine)
+	block := "\n# mnesh shell hook\n"
+	if !strings.Contains(string(existing), pathLine) {
+		block += pathLine + "\n"
+	}
+	if !strings.Contains(string(existing), sourceLine) {
+		block += sourceLine + "\n"
+	}
 	if _, err := file.WriteString(block); err != nil {
 		return err
 	}
@@ -396,4 +399,8 @@ func shellRCPath(root, shell string) (string, error) {
 
 func sourceLineForHook(hookPath string) string {
 	return fmt.Sprintf("[[ -f %q ]] && source %q", hookPath, hookPath)
+}
+
+func pathLineForBin(binDir string) string {
+	return fmt.Sprintf("export PATH=%q:$PATH", binDir)
 }

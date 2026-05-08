@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,9 +81,12 @@ func Init(ctx context.Context, opts Options) error {
 		return fmt.Errorf("write active model marker: %w", err)
 	}
 	for _, shell := range hooks.SupportedShells() {
-		if _, err := hooks.Write(paths.HooksDir, shell); err != nil {
+		if _, err := hooks.Write(paths.HooksDir, shell, paths.BinPath); err != nil {
 			return fmt.Errorf("write %s hook: %w", shell, err)
 		}
+	}
+	if err := installBinary(paths); err != nil {
+		return err
 	}
 
 	if !opts.SkipDownloads {
@@ -114,6 +118,8 @@ func Doctor() error {
 		{"config", paths.ConfigPath},
 		{"db", paths.DBPath},
 		{"models", paths.ModelsDir},
+		{"bin", paths.BinDir},
+		{"binary", paths.BinPath},
 		{"logs", paths.LogsDir},
 		{"cache", paths.CacheDir},
 		{"hooks", paths.HooksDir},
@@ -154,6 +160,7 @@ func ensureDirs(paths mneshfs.Paths) error {
 		paths.Root,
 		paths.DataDir,
 		paths.ModelsDir,
+		paths.BinDir,
 		paths.LogsDir,
 		paths.CacheDir,
 		paths.HooksDir,
@@ -252,4 +259,44 @@ func downloadFile(ctx context.Context, client *http.Client, url, targetPath stri
 		return err
 	}
 	return os.Rename(tmpPath, targetPath)
+}
+
+func installBinary(paths mneshfs.Paths) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve current executable: %w", err)
+	}
+
+	src, err := os.Open(exePath)
+	if err != nil {
+		return fmt.Errorf("open current executable: %w", err)
+	}
+	defer src.Close()
+
+	if err := os.MkdirAll(paths.BinDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir bin dir: %w", err)
+	}
+
+	tmpPath := paths.BinPath + ".tmp"
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("create temp binary: %w", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		return fmt.Errorf("copy executable: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close temp binary: %w", err)
+	}
+	if err := os.Chmod(tmpPath, 0o755); err != nil {
+		return fmt.Errorf("chmod temp binary: %w", err)
+	}
+	if err := os.Rename(tmpPath, paths.BinPath); err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			return fmt.Errorf("install binary into %s: %w", paths.BinPath, err)
+		}
+		return fmt.Errorf("move binary into place: %w", err)
+	}
+	return nil
 }

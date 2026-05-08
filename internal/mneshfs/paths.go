@@ -10,6 +10,8 @@ type Paths struct {
 	Root            string
 	DataDir         string
 	ModelsDir       string
+	BinDir          string
+	BinPath         string
 	LogsDir         string
 	CacheDir        string
 	HooksDir        string
@@ -29,6 +31,8 @@ func Resolve() (Paths, error) {
 		Root:            root,
 		DataDir:         filepath.Join(root, "data"),
 		ModelsDir:       filepath.Join(root, "models"),
+		BinDir:          filepath.Join(root, "bin"),
+		BinPath:         filepath.Join(root, "bin", "mnesh"),
 		LogsDir:         filepath.Join(root, "logs"),
 		CacheDir:        filepath.Join(root, "cache"),
 		HooksDir:        filepath.Join(root, "hooks"),

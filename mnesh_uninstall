@@ -32,7 +32,9 @@ text = path.read_text()
 lines = text.splitlines()
 filtered = [
     line for line in lines
-    if "mnesh shell hook" not in line and ".mnesh/hooks/mnesh." not in line
+    if "mnesh shell hook" not in line
+    and ".mnesh/hooks/mnesh." not in line
+    and ".mnesh/bin" not in line
 ]
 new_text = "\n".join(filtered)
 if text.endswith("\n"):
