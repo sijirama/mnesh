@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MNESH_HOME="${HOME}/.mnesh"
+ZSH_RC="${HOME}/.zshrc"
+BASH_RC="${HOME}/.bashrc"
+
+print_banner() {
+cat <<'EOF'
+ __  __ _   _ _____ ____  _   _
+|  \/  | \ | | ____/ ___|| | | |
+| |\/| |  \| |  _| \___ \| |_| |
+| |  | | |\  | |___ ___) |  _  |
+|_|  |_|_| \_|_____|____/|_| |_|
+
+        uninstall / reset utility
+EOF
+}
+
+remove_hook_line() {
+  local rc_file="$1"
+  if [[ ! -f "$rc_file" ]]; then
+    return 0
+  fi
+
+  python3 - "$rc_file" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+lines = text.splitlines()
+filtered = [
+    line for line in lines
+    if "mnesh shell hook" not in line
+    and ".mnesh/hooks/mnesh." not in line
+    and ".mnesh/bin" not in line
+]
+new_text = "\n".join(filtered)
+if text.endswith("\n"):
+    new_text += "\n"
+path.write_text(new_text)
+PY
+}
+
+main() {
+  print_banner
+  echo
+  echo "This will remove all local mnesh state from:"
+  echo "  ${MNESH_HOME}"
+  echo
+  echo "It will also remove mnesh hook source lines from:"
+  echo "  ${ZSH_RC}"
+  echo "  ${BASH_RC}"
+  echo
+
+  if [[ ! -d "${MNESH_HOME}" && ! -f "${ZSH_RC}" && ! -f "${BASH_RC}" ]]; then
+    echo "Nothing to uninstall."
+    exit 0
+  fi
+
+  read -r -p "Continue? [y/N] " first_confirm
+  if [[ ! "${first_confirm}" =~ ^[Yy]$ ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+
+  echo
+  echo "Type 'DELETE' to permanently remove mnesh data:"
+  read -r final_confirm
+  if [[ "${final_confirm}" != "DELETE" ]]; then
+    echo "Aborted."
+    exit 0
+  fi
+
+  echo
+  echo "Removing shell hook entries..."
+  remove_hook_line "${ZSH_RC}"
+  remove_hook_line "${BASH_RC}"
+
+  if [[ -d "${MNESH_HOME}" ]]; then
+    echo "Removing ${MNESH_HOME}..."
+    rm -rf "${MNESH_HOME}"
+  fi
+
+  echo
+  echo "mnesh has been uninstalled from this machine."
+  echo "You can start fresh with:"
+  echo "  mnesh init"
+  echo "  mnesh install-hook zsh"
+}
+
+main "$@"
