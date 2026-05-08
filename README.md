@@ -19,6 +19,33 @@ and outputs a suggested next command.
 
 built initially with an rnn trained on large-scale synthetic shell telemetry, with plans for fine-tuning on personal command history.
 
+## install
+
+quick install (downloads the latest published release into `~/.mnesh/bin/mnesh`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sijirama/mnesh/main/scripts/install.sh | bash
+```
+
+pin a version with `MNESH_VERSION`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sijirama/mnesh/main/scripts/install.sh | MNESH_VERSION=v0.2.0 bash
+```
+
+after the binary is installed, finish setup:
+
+```bash
+~/.mnesh/bin/mnesh init
+~/.mnesh/bin/mnesh install-hook zsh   # or bash
+```
+
+to fully reset a local install (interactive — prompts for confirmation):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sijirama/mnesh/main/scripts/uninstall.sh | bash
+```
+
 ## local service bootstrap
 
 the repo now includes a go bootstrap cli for the local runtime:
@@ -52,7 +79,7 @@ the hook records commands into `~/.mnesh/data/commands.db` with a per-shell sess
 
 for zsh, the installed hook also binds `Alt-p` to fetch a prediction and insert it into the current command line.
 
-to fully reset a local install, run:
+to reset a local checkout, run:
 
 ```bash
 bash ./mnesh_uninstall

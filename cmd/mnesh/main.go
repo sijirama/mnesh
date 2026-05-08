@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/sijirama/mnesh/internal/bootstrap"
@@ -17,7 +18,8 @@ import (
 	"github.com/sijirama/mnesh/internal/store"
 )
 
-const version = "0.1.0"
+// version is overridden at build time via -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -83,7 +85,7 @@ func usage() {
 	fmt.Println("  mnesh doctor")
 	fmt.Println("  mnesh daemon")
 	fmt.Println("  mnesh record --cmd <command> [--cwd <dir>] [--shell <name>] [--session-id <id>]")
-	fmt.Println("  mnesh recent [--limit N]")
+	fmt.Println("  mnesh recent [--limit N] [--json]")
 	fmt.Println("  mnesh window [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh predict [--model <v5|v6>] [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh hook <zsh|bash>")
@@ -154,6 +156,7 @@ func runRecord(ctx context.Context, args []string) error {
 func runRecent(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("recent", flag.ContinueOnError)
 	limit := fs.Int("limit", 10, "number of recent command events")
+	asJSON := fs.Bool("json", false, "emit raw JSON instead of a formatted table")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -166,12 +169,47 @@ func runRecent(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	body, err := json.MarshalIndent(events, "", "  ")
-	if err != nil {
-		return err
+
+	if *asJSON {
+		body, err := json.MarshalIndent(events, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(body))
+		return nil
 	}
-	fmt.Println(string(body))
-	return nil
+
+	if len(events) == 0 {
+		fmt.Println("no recent commands")
+		return nil
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "TIME\tWHERE\tCMD")
+	for _, e := range events {
+		ts := e.CreatedAt.Local().Format("15:04:05")
+		where := prettyCwd(e.Cwd)
+		if e.GitBranch != "" {
+			where = fmt.Sprintf("%s (%s)", where, e.GitBranch)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", ts, where, e.Command)
+	}
+	return tw.Flush()
+}
+
+func prettyCwd(cwd string) string {
+	if cwd == "" {
+		return "-"
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if cwd == home {
+			return "~"
+		}
+		if strings.HasPrefix(cwd, home+string(os.PathSeparator)) {
+			return "~" + cwd[len(home):]
+		}
+	}
+	return cwd
 }
 
 func runWindow(ctx context.Context, args []string) error {
