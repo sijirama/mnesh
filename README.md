@@ -27,6 +27,9 @@ the repo now includes a go bootstrap cli for the local runtime:
 go run ./cmd/mnesh init
 go run ./cmd/mnesh doctor
 go run ./cmd/mnesh daemon
+go run ./cmd/mnesh record --cmd "git status" --cwd "$PWD"
+go run ./cmd/mnesh recent --limit 5
+go run ./cmd/mnesh window --limit 10
 ```
 
 `mnesh init` creates `~/.mnesh/`, writes a default config, touches the sqlite path, and downloads the published `v5` and `v6` model bundles from hugging face.

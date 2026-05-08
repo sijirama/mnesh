@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sijirama/mnesh/internal/mneshfs"
+	"github.com/sijirama/mnesh/internal/store"
 )
 
 type Options struct {
@@ -67,6 +68,9 @@ func Init(ctx context.Context, opts Options) error {
 	}
 	if err := touch(paths.DBPath); err != nil {
 		return fmt.Errorf("create commands db placeholder: %w", err)
+	}
+	if err := store.EnsureSchema(ctx, paths.DBPath); err != nil {
+		return fmt.Errorf("initialize sqlite schema: %w", err)
 	}
 	if err := writeDefaultConfig(paths); err != nil {
 		return err
