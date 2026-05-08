@@ -19,6 +19,18 @@ and outputs a suggested next command.
 
 built initially with an rnn trained on large-scale synthetic shell telemetry, with plans for fine-tuning on personal command history.
 
+## local service bootstrap
+
+the repo now includes a go bootstrap cli for the local runtime:
+
+```bash
+go run ./cmd/mnesh init
+go run ./cmd/mnesh doctor
+go run ./cmd/mnesh daemon
+```
+
+`mnesh init` creates `~/.mnesh/`, writes a default config, touches the sqlite path, and downloads the published `v5` and `v6` model bundles from hugging face.
+
 ## useful resources
 
 - https://www.sciencedirect.com/science/article/pii/S2352340921006806?via%3Dihub
