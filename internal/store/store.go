@@ -61,6 +61,7 @@ func ListRecentCommandEvents(ctx context.Context, dbPath string, limit int) ([]C
 	if err := json.Unmarshal(out, &events); err != nil {
 		return nil, fmt.Errorf("decode recent events: %w", err)
 	}
+	slices.Reverse(events)
 	return events, nil
 }
 
