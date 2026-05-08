@@ -50,6 +50,8 @@ that appends one safe `source ~/.mnesh/hooks/...` line into your shell rc file.
 
 the hook records commands into `~/.mnesh/data/commands.db` with a per-shell session id, cwd, exit code, host, and best-effort git branch.
 
+for zsh, the installed hook also binds `Alt-p` to fetch a prediction and insert it into the current command line.
+
 to fully reset a local install, run:
 
 ```bash

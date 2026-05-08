@@ -70,6 +70,40 @@ _mnesh_preexec() {
   MNESH_LAST_CWD="$PWD"
 }
 
+_mnesh_extract_suggestion() {
+  local payload="$1"
+  if [[ -z "$payload" ]]; then
+    return 0
+  fi
+  python3 - "$payload" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+print(payload.get("suggestion", ""))
+PY
+}
+
+_mnesh_predict_widget() {
+  local payload suggestion
+  payload="$("$MNESH_BIN" predict --limit 10 2>/dev/null)"
+  suggestion="$(_mnesh_extract_suggestion "$payload")"
+
+  if [[ -z "$suggestion" ]]; then
+    zle -M "mnesh: no suggestion"
+    return 0
+  fi
+
+  BUFFER="$suggestion"
+  CURSOR=${#BUFFER}
+  zle redisplay
+}
+
 _mnesh_precmd() {
   local exit_code=$?
   local cmd="${MNESH_LAST_CMD:-}"
@@ -102,6 +136,8 @@ _mnesh_precmd() {
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _mnesh_preexec
 add-zsh-hook precmd _mnesh_precmd
+zle -N _mnesh_predict_widget
+bindkey '^[p' _mnesh_predict_widget
 `, binPath)
 }
 
