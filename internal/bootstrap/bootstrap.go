@@ -14,6 +14,7 @@ import (
 
 	"github.com/sijirama/mnesh/internal/hooks"
 	"github.com/sijirama/mnesh/internal/mneshfs"
+	"github.com/sijirama/mnesh/internal/python"
 	"github.com/sijirama/mnesh/internal/store"
 )
 
@@ -66,13 +67,13 @@ func Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	fmt.Println("1/7 creating local directories...")
+	fmt.Println("1/8 creating local directories...")
 	if err := ensureDirs(paths); err != nil {
 		return err
 	}
 	fmt.Printf("   ok: %s\n", paths.Root)
 
-	fmt.Println("2/7 preparing sqlite database...")
+	fmt.Println("2/8 preparing sqlite database...")
 	if err := touch(paths.DBPath); err != nil {
 		return fmt.Errorf("create commands db placeholder: %w", err)
 	}
@@ -81,19 +82,19 @@ func Init(ctx context.Context, opts Options) error {
 	}
 	fmt.Printf("   ok: %s\n", paths.DBPath)
 
-	fmt.Println("3/7 writing config...")
+	fmt.Println("3/8 writing config...")
 	if err := writeDefaultConfig(paths); err != nil {
 		return err
 	}
 	fmt.Printf("   ok: %s\n", paths.ConfigPath)
 
-	fmt.Println("4/7 setting active model...")
+	fmt.Println("4/8 setting active model...")
 	if err := os.WriteFile(paths.ActiveModelPath, []byte("v5\n"), 0o644); err != nil {
 		return fmt.Errorf("write active model marker: %w", err)
 	}
 	fmt.Printf("   ok: %s -> v5\n", paths.ActiveModelPath)
 
-	fmt.Println("5/7 writing shell hook files...")
+	fmt.Println("5/8 writing shell hook files...")
 	for _, shell := range hooks.SupportedShells() {
 		if _, err := hooks.Write(paths.HooksDir, shell, paths.BinPath); err != nil {
 			return fmt.Errorf("write %s hook: %w", shell, err)
@@ -101,13 +102,19 @@ func Init(ctx context.Context, opts Options) error {
 		fmt.Printf("   ok: %s/%s\n", paths.HooksDir, hookFileName(shell))
 	}
 
-	fmt.Println("6/7 installing local binary...")
+	fmt.Println("6/8 installing local binary...")
 	if err := installBinary(paths); err != nil {
 		return err
 	}
 	fmt.Printf("   ok: %s\n", paths.BinPath)
 
-	fmt.Printf("7/7 installing model bundles%s...\n", skipNote(opts.SkipDownloads))
+	fmt.Println("7/8 materializing python runtime...")
+	if err := python.Materialize(paths.PythonDir); err != nil {
+		return fmt.Errorf("materialize python runtime: %w", err)
+	}
+	fmt.Printf("   ok: %s\n", paths.PredictWorkerPath)
+
+	fmt.Printf("8/8 installing model bundles%s...\n", skipNote(opts.SkipDownloads))
 	if !opts.SkipDownloads {
 		for _, spec := range modelCatalog {
 			fmt.Printf("   downloading %s...\n", spec.Name)
@@ -147,6 +154,8 @@ func Doctor() error {
 		{"cache", paths.CacheDir},
 		{"hooks", paths.HooksDir},
 		{"active_model", paths.ActiveModelPath},
+		{"python", paths.PythonDir},
+		{"worker", paths.PredictWorkerPath},
 	}
 
 	for _, check := range checks {

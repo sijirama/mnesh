@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 )
 
 func SupportedShells() []string {
@@ -52,13 +54,13 @@ func Write(dir, shell, binPath string) (string, error) {
 }
 
 func zshHook(binPath string) string {
-	return fmt.Sprintf(`# mnesh zsh hook
+	const tmpl = `# mnesh zsh hook
 if [[ -z "${MNESH_SESSION_ID:-}" ]]; then
   export MNESH_SESSION_ID="sess-${EPOCHREALTIME//./}-${$}-${RANDOM}"
 fi
 
 if [[ -z "${MNESH_BIN:-}" ]]; then
-  export MNESH_BIN=%q
+  export MNESH_BIN=__MNESH_BIN__
 fi
 
 _mnesh_git_branch() {
@@ -90,6 +92,9 @@ PY
 }
 
 _mnesh_predict_widget() {
+  zle -M "mnesh predicting..."
+  zle -R
+
   local payload suggestion
   payload="$("$MNESH_BIN" predict --limit 10 2>/dev/null)"
   suggestion="$(_mnesh_extract_suggestion "$payload")"
@@ -101,6 +106,7 @@ _mnesh_predict_widget() {
 
   BUFFER="$suggestion"
   CURSOR=${#BUFFER}
+  zle -M ""
   zle redisplay
 }
 
@@ -138,17 +144,18 @@ add-zsh-hook preexec _mnesh_preexec
 add-zsh-hook precmd _mnesh_precmd
 zle -N _mnesh_predict_widget
 bindkey '^[p' _mnesh_predict_widget
-`, binPath)
+`
+	return strings.ReplaceAll(tmpl, "__MNESH_BIN__", strconv.Quote(binPath))
 }
 
 func bashHook(binPath string) string {
-	return fmt.Sprintf(`# mnesh bash hook
+	const tmpl = `# mnesh bash hook
 if [[ -z "${MNESH_SESSION_ID:-}" ]]; then
   export MNESH_SESSION_ID="sess-$(date +%s)-$$-$RANDOM"
 fi
 
 if [[ -z "${MNESH_BIN:-}" ]]; then
-  export MNESH_BIN=%q
+  export MNESH_BIN=__MNESH_BIN__
 fi
 
 _mnesh_git_branch() {
@@ -195,5 +202,6 @@ _mnesh_precmd() {
 
 trap '_mnesh_capture_command' DEBUG
 PROMPT_COMMAND="_mnesh_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-`, binPath)
+`
+	return strings.ReplaceAll(tmpl, "__MNESH_BIN__", strconv.Quote(binPath))
 }

@@ -288,7 +288,10 @@ func runPredict(ctx context.Context, args []string) error {
 		return err
 	}
 
-	workerPath := filepath.Join("scripts", "predict_worker.py")
+	workerPath := paths.PredictWorkerPath
+	if _, err := os.Stat(workerPath); err != nil {
+		return fmt.Errorf("predict worker not found at %s: run `mnesh init` to materialize it", workerPath)
+	}
 	payload := map[string]any{
 		"model_dir":  filepath.Join(paths.ModelsDir, selectedModel),
 		"events":     events,
@@ -300,7 +303,7 @@ func runPredict(ctx context.Context, args []string) error {
 		return err
 	}
 
-	cmd := exec.CommandContext(ctx, resolvePython(), workerPath, string(body))
+	cmd := exec.CommandContext(ctx, resolvePython(paths), workerPath, string(body))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("predict worker failed: %w: %s", err, string(out))
@@ -420,9 +423,12 @@ func resolveModel(paths mneshfs.Paths, requested string) (string, error) {
 	return modelName, nil
 }
 
-func resolvePython() string {
+func resolvePython(paths mneshfs.Paths) string {
 	if custom := strings.TrimSpace(os.Getenv("MNESH_PYTHON")); custom != "" {
 		return custom
+	}
+	if _, err := os.Stat(paths.VenvPython); err == nil {
+		return paths.VenvPython
 	}
 	if _, err := os.Stat(filepath.Join(".venv", "bin", "python3")); err == nil {
 		return filepath.Join(".venv", "bin", "python3")
