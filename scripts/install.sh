@@ -103,6 +103,11 @@ main() {
   echo "next steps:"
   echo "  ${BIN_PATH} init"
   echo "  ${BIN_PATH} install-hook zsh   # or bash"
+  echo "  exec zsh"
+  echo "  ${BIN_PATH} llm install"
+  echo "  ${BIN_PATH} llm start"
+  echo "  ${BIN_PATH} llm status"
+  echo "  ${BIN_PATH} doctor"
   echo
   echo "to use \`mnesh\` directly from your shell, add to PATH:"
   echo "  export PATH=\"${BIN_DIR}:\$PATH\""
