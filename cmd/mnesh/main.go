@@ -14,6 +14,7 @@ import (
 
 	"github.com/sijirama/mnesh/internal/bootstrap"
 	"github.com/sijirama/mnesh/internal/hooks"
+	"github.com/sijirama/mnesh/internal/llm"
 	"github.com/sijirama/mnesh/internal/mneshfs"
 	"github.com/sijirama/mnesh/internal/store"
 )
@@ -68,6 +69,10 @@ func main() {
 		if err := runInstallHook(os.Args[2:]); err != nil {
 			fatal(err)
 		}
+	case "llm":
+		if err := runLLM(ctx, os.Args[2:]); err != nil {
+			fatal(err)
+		}
 	case "version":
 		fmt.Printf("mnesh %s\n", version)
 	default:
@@ -90,6 +95,7 @@ func usage() {
 	fmt.Println("  mnesh predict [--model <v5|v6>] [--session-id <id>] [--limit N]")
 	fmt.Println("  mnesh hook <zsh|bash>")
 	fmt.Println("  mnesh install-hook <zsh|bash>")
+	fmt.Println("  mnesh llm <install|start|stop|restart|status>")
 	fmt.Println("  mnesh version")
 	fmt.Println()
 	fmt.Println("default home:")
@@ -288,6 +294,27 @@ func runPredict(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if selectedModel == "qwen" {
+		cfg, err := bootstrap.ReadConfig(paths)
+		if err != nil {
+			return fmt.Errorf("read config: %w", err)
+		}
+		llmCfg := cfg.LLM
+		if llmCfg.ModelPath == "" {
+			llmCfg = llm.DefaultConfig(paths)
+		}
+		prediction, err := llm.Predict(ctx, llmCfg, events, *maxTokens)
+		if err != nil {
+			return fmt.Errorf("llama predict failed: %w", err)
+		}
+		body, err := json.MarshalIndent(prediction, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(body))
+		return nil
+	}
+
 	workerPath := paths.PredictWorkerPath
 	if _, err := os.Stat(workerPath); err != nil {
 		return fmt.Errorf("predict worker not found at %s: run `mnesh init` to materialize it", workerPath)
@@ -397,6 +424,59 @@ func runInstallHook(args []string) error {
 	fmt.Println("3/3 shell restart required")
 	fmt.Println("   run: exec zsh")
 	return nil
+}
+
+func runLLM(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: mnesh llm <install|start|stop|restart|status>")
+	}
+	paths, err := mneshfs.Resolve()
+	if err != nil {
+		return err
+	}
+	cfg, err := bootstrap.ReadConfig(paths)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	llmCfg := llm.MergeConfig(paths, cfg.LLM)
+
+	switch args[0] {
+	case "install":
+		fmt.Println("1/3 writing llama service unit...")
+		if err := llm.WriteUnit(paths, llmCfg); err != nil {
+			return err
+		}
+		fmt.Printf("   ok: %s\n", paths.LLMServicePath)
+		fmt.Println("2/3 reloading user systemd...")
+		if err := llm.DaemonReload(ctx); err != nil {
+			return err
+		}
+		fmt.Println("   ok: daemon-reload")
+		fmt.Println("3/3 enabling service...")
+		if err := llm.Enable(ctx); err != nil {
+			return err
+		}
+		fmt.Println("   ok: enabled mnesh-llama.service")
+		return nil
+	case "start":
+		return llm.Start(ctx)
+	case "stop":
+		return llm.Stop(ctx)
+	case "restart":
+		return llm.Restart(ctx)
+	case "status":
+		status := llm.StatusCheck(ctx, paths, llmCfg)
+		fmt.Printf("service_file: %v\n", status.ServiceFileExists)
+		fmt.Printf("server_bin:   %v\n", status.ServerBinExists)
+		fmt.Printf("model_file:   %v\n", status.ModelExists)
+		fmt.Printf("systemctl:    %v\n", status.SystemctlExists)
+		fmt.Printf("enabled:      %v\n", status.IsEnabled)
+		fmt.Printf("active:       %v\n", status.IsActive)
+		fmt.Printf("health:       %v (%s)\n", status.HealthOK, status.HealthStatus)
+		return nil
+	default:
+		return fmt.Errorf("usage: mnesh llm <install|start|stop|restart|status>")
+	}
 }
 
 func hostOrLocal() string {

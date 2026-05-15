@@ -72,6 +72,38 @@ _mnesh_preexec() {
   MNESH_LAST_CWD="$PWD"
 }
 
+_mnesh_expand_alias() {
+  local cmd="$1"
+  local -a parts
+  parts=(${(z)cmd})
+  if (( ${#parts[@]} == 0 )); then
+    printf '%s\n' "$cmd"
+    return 0
+  fi
+
+  local head="${parts[1]}"
+  local expanded="$head"
+  local seen=0
+  while [[ -n "${aliases[$expanded]:-}" && $seen -lt 5 ]]; do
+    expanded="${aliases[$expanded]}"
+    seen=$((seen + 1))
+    local -a nested
+    nested=(${(z)expanded})
+    if (( ${#nested[@]} == 0 )); then
+      break
+    fi
+    expanded="${nested[1]}"
+  done
+
+  if [[ -n "${aliases[$head]:-}" ]]; then
+    parts[1]="${aliases[$head]}"
+    printf '%s\n' "${(j: :)parts}"
+    return 0
+  fi
+
+  printf '%s\n' "$cmd"
+}
+
 _mnesh_extract_suggestion() {
   local payload="$1"
   if [[ -z "$payload" ]]; then
@@ -118,7 +150,9 @@ _mnesh_precmd() {
   if [[ -z "$cmd" ]]; then
     return
   fi
-  if [[ "$cmd" == "$MNESH_BIN"* ]]; then
+  cmd="$(_mnesh_expand_alias "$cmd")"
+  local mnesh_name="${MNESH_BIN:t}"
+  if [[ "$cmd" == "$MNESH_BIN"* || "$cmd" == "${mnesh_name}"* ]]; then
     MNESH_LAST_CMD=""
     return
   fi
@@ -166,9 +200,43 @@ _mnesh_capture_command() {
   local cmd
   cmd="$(history 1 | sed 's/^[ ]*[0-9]\+[ ]*//')"
   if [[ -n "$cmd" ]]; then
-    MNESH_LAST_CMD="$cmd"
+    MNESH_LAST_CMD="$(_mnesh_expand_alias "$cmd")"
     MNESH_LAST_CWD="$PWD"
   fi
+}
+
+_mnesh_expand_alias() {
+  local cmd="$1"
+  local head rest expanded line seen
+  head="${cmd%% *}"
+  if [[ -z "$head" ]]; then
+    printf '%s\n' "$cmd"
+    return 0
+  fi
+  rest="${cmd#"$head"}"
+  expanded="$head"
+  seen=0
+  while [[ $seen -lt 5 ]]; do
+    line="$(alias "$expanded" 2>/dev/null || true)"
+    if [[ -z "$line" ]]; then
+      break
+    fi
+    expanded="${line#*=}"
+    expanded="${expanded#\'}"
+    expanded="${expanded%\'}"
+    expanded="${expanded#\"}"
+    expanded="${expanded%\"}"
+    seen=$((seen + 1))
+    if [[ "$expanded" != *" "* ]]; then
+      continue
+    fi
+    break
+  done
+  if [[ "$expanded" != "$head" ]]; then
+    printf '%s%s\n' "$expanded" "$rest"
+    return 0
+  fi
+  printf '%s\n' "$cmd"
 }
 
 _mnesh_precmd() {
@@ -179,7 +247,10 @@ _mnesh_precmd() {
   if [[ -z "$cmd" ]]; then
     return
   fi
-  if [[ "$cmd" == "$MNESH_BIN"* ]]; then
+  cmd="$(_mnesh_expand_alias "$cmd")"
+  local mnesh_name
+  mnesh_name="$(basename "$MNESH_BIN")"
+  if [[ "$cmd" == "$MNESH_BIN"* || "$cmd" == "${mnesh_name}"* ]]; then
     MNESH_LAST_CMD=""
     return
   fi

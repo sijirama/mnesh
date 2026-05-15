@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/sijirama/mnesh/internal/hooks"
+	"github.com/sijirama/mnesh/internal/llm"
 	"github.com/sijirama/mnesh/internal/mneshfs"
 	"github.com/sijirama/mnesh/internal/python"
 	"github.com/sijirama/mnesh/internal/store"
@@ -23,14 +25,15 @@ type Options struct {
 }
 
 type Config struct {
-	ActiveModel      string   `json:"active_model"`
-	DefaultModel     string   `json:"default_model"`
-	InferenceBackend string   `json:"inference_backend"`
-	DBPath           string   `json:"db_path"`
-	ModelsDir        string   `json:"models_dir"`
-	LogsDir          string   `json:"logs_dir"`
-	CacheDir         string   `json:"cache_dir"`
-	InstalledModels  []string `json:"installed_models"`
+	ActiveModel      string     `json:"active_model"`
+	DefaultModel     string     `json:"default_model"`
+	InferenceBackend string     `json:"inference_backend"`
+	DBPath           string     `json:"db_path"`
+	ModelsDir        string     `json:"models_dir"`
+	LogsDir          string     `json:"logs_dir"`
+	CacheDir         string     `json:"cache_dir"`
+	InstalledModels  []string   `json:"installed_models"`
+	LLM              llm.Config `json:"llm"`
 }
 
 type modelSpec struct {
@@ -67,13 +70,13 @@ func Init(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	fmt.Println("1/8 creating local directories...")
+	fmt.Println("1/10 creating local directories...")
 	if err := ensureDirs(paths); err != nil {
 		return err
 	}
 	fmt.Printf("   ok: %s\n", paths.Root)
 
-	fmt.Println("2/8 preparing sqlite database...")
+	fmt.Println("2/10 preparing sqlite database...")
 	if err := touch(paths.DBPath); err != nil {
 		return fmt.Errorf("create commands db placeholder: %w", err)
 	}
@@ -82,19 +85,19 @@ func Init(ctx context.Context, opts Options) error {
 	}
 	fmt.Printf("   ok: %s\n", paths.DBPath)
 
-	fmt.Println("3/8 writing config...")
+	fmt.Println("3/10 writing config...")
 	if err := writeDefaultConfig(paths); err != nil {
 		return err
 	}
 	fmt.Printf("   ok: %s\n", paths.ConfigPath)
 
-	fmt.Println("4/8 setting active model...")
-	if err := os.WriteFile(paths.ActiveModelPath, []byte("v5\n"), 0o644); err != nil {
+	fmt.Println("4/10 setting active model...")
+	if err := os.WriteFile(paths.ActiveModelPath, []byte("qwen\n"), 0o644); err != nil {
 		return fmt.Errorf("write active model marker: %w", err)
 	}
-	fmt.Printf("   ok: %s -> v5\n", paths.ActiveModelPath)
+	fmt.Printf("   ok: %s -> qwen\n", paths.ActiveModelPath)
 
-	fmt.Println("5/8 writing shell hook files...")
+	fmt.Println("5/10 writing shell hook files...")
 	for _, shell := range hooks.SupportedShells() {
 		if _, err := hooks.Write(paths.HooksDir, shell, paths.BinPath); err != nil {
 			return fmt.Errorf("write %s hook: %w", shell, err)
@@ -102,19 +105,33 @@ func Init(ctx context.Context, opts Options) error {
 		fmt.Printf("   ok: %s/%s\n", paths.HooksDir, hookFileName(shell))
 	}
 
-	fmt.Println("6/8 installing local binary...")
+	fmt.Println("6/10 installing local binary...")
 	if err := installBinary(paths); err != nil {
 		return err
 	}
 	fmt.Printf("   ok: %s\n", paths.BinPath)
 
-	fmt.Println("7/8 materializing python runtime...")
+	fmt.Println("7/10 materializing python runtime...")
 	if err := python.Materialize(paths.PythonDir); err != nil {
 		return fmt.Errorf("materialize python runtime: %w", err)
 	}
 	fmt.Printf("   ok: %s\n", paths.PredictWorkerPath)
 
-	fmt.Printf("8/8 installing model bundles%s...\n", skipNote(opts.SkipDownloads))
+	fmt.Println("8/10 writing llama service unit...")
+	llmCfg := llm.DefaultConfig(paths)
+	if err := llm.WriteUnit(paths, llmCfg); err != nil {
+		return fmt.Errorf("write llama service unit: %w", err)
+	}
+	fmt.Printf("   ok: %s\n", paths.LLMServicePath)
+	if llmCfg.ServerBin == "" {
+		fmt.Println("   note: llama-server not found on PATH; doctor will report this until installed")
+	} else if err := llm.DaemonReload(ctx); err != nil {
+		fmt.Printf("   note: daemon-reload skipped: %v\n", err)
+	} else {
+		fmt.Println("   ok: systemd --user daemon-reload")
+	}
+
+	fmt.Printf("9/10 installing model bundles%s...\n", skipNote(opts.SkipDownloads))
 	if !opts.SkipDownloads {
 		for _, spec := range modelCatalog {
 			fmt.Printf("   downloading %s...\n", spec.Name)
@@ -123,6 +140,16 @@ func Init(ctx context.Context, opts Options) error {
 			}
 			fmt.Printf("   ok: %s\n", filepath.Join(paths.ModelsDir, spec.Name))
 		}
+	} else {
+		fmt.Println("   skipped downloads")
+	}
+
+	fmt.Printf("10/10 installing qwen gguf%s...\n", skipNote(opts.SkipDownloads))
+	if !opts.SkipDownloads {
+		if err := downloadQwenModel(ctx, paths); err != nil {
+			return err
+		}
+		fmt.Printf("   ok: %s\n", paths.QwenModelPath)
 	} else {
 		fmt.Println("   skipped downloads")
 	}
@@ -156,6 +183,7 @@ func Doctor() error {
 		{"active_model", paths.ActiveModelPath},
 		{"python", paths.PythonDir},
 		{"worker", paths.PredictWorkerPath},
+		{"llm_service", paths.LLMServicePath},
 	}
 
 	for _, check := range checks {
@@ -179,6 +207,35 @@ func Doctor() error {
 		} else {
 			fmt.Printf("%-12s missing  %s\n", "model:"+modelName, modelPath)
 		}
+	}
+
+	if _, err := os.Stat(paths.QwenModelPath); err == nil {
+		fmt.Printf("%-12s ok      %s\n", "model:qwen", paths.QwenModelPath)
+	} else {
+		fmt.Printf("%-12s missing  %s\n", "model:qwen", paths.QwenModelPath)
+	}
+
+	cfg, _ := ReadConfig(paths)
+	llmCfg := llm.MergeConfig(paths, cfg.LLM)
+	if llmCfg.ServerBin == "" {
+		fmt.Printf("%-12s missing  llama-server\n", "llama_bin")
+	} else if _, err := os.Stat(llmCfg.ServerBin); err == nil {
+		fmt.Printf("%-12s ok      %s\n", "llama_bin", llmCfg.ServerBin)
+	} else if resolved, err := exec.LookPath(llmCfg.ServerBin); err == nil {
+		fmt.Printf("%-12s ok      %s\n", "llama_bin", resolved)
+	} else {
+		fmt.Printf("%-12s missing  %s\n", "llama_bin", llmCfg.ServerBin)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	llmStatus := llm.StatusCheck(ctx, paths, llmCfg)
+	fmt.Printf("%-12s %v\n", "llm_active", llmStatus.IsActive)
+	fmt.Printf("%-12s %v\n", "llm_enabled", llmStatus.IsEnabled)
+	if llmStatus.HealthOK {
+		fmt.Printf("%-12s ok      %s\n", "llm_health", llmStatus.HealthStatus)
+	} else {
+		fmt.Printf("%-12s down    %s\n", "llm_health", llmStatus.HealthStatus)
 	}
 
 	for _, shell := range hooks.SupportedShells() {
@@ -243,14 +300,15 @@ func ensureDirs(paths mneshfs.Paths) error {
 
 func writeDefaultConfig(paths mneshfs.Paths) error {
 	cfg := Config{
-		ActiveModel:      "v5",
-		DefaultModel:     "v5",
-		InferenceBackend: "python-worker",
+		ActiveModel:      "qwen",
+		DefaultModel:     "qwen",
+		InferenceBackend: "llama-server",
 		DBPath:           paths.DBPath,
 		ModelsDir:        paths.ModelsDir,
 		LogsDir:          paths.LogsDir,
 		CacheDir:         paths.CacheDir,
-		InstalledModels:  []string{"v5", "v6"},
+		InstalledModels:  []string{"qwen", "v5", "v6"},
+		LLM:              llm.DefaultConfig(paths),
 	}
 
 	body, err := json.MarshalIndent(cfg, "", "  ")
@@ -265,6 +323,18 @@ func writeDefaultConfig(paths mneshfs.Paths) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
+}
+
+func ReadConfig(paths mneshfs.Paths) (Config, error) {
+	var cfg Config
+	body, err := os.ReadFile(paths.ConfigPath)
+	if err != nil {
+		return cfg, err
+	}
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
 }
 
 func touch(path string) error {
@@ -294,6 +364,21 @@ func downloadModelBundle(ctx context.Context, modelsDir string, spec modelSpec) 
 		if err := downloadFile(ctx, client, url, targetPath); err != nil {
 			return fmt.Errorf("download %s for %s: %w", fileName, spec.Name, err)
 		}
+	}
+	return nil
+}
+
+func downloadQwenModel(ctx context.Context, paths mneshfs.Paths) error {
+	if err := os.MkdirAll(paths.QwenDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir qwen model dir %s: %w", paths.QwenDir, err)
+	}
+	if _, err := os.Stat(paths.QwenModelPath); err == nil {
+		return nil
+	}
+	client := &http.Client{Timeout: 90 * time.Minute}
+	url := fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", llm.DefaultRepoID, llm.DefaultFileName)
+	if err := downloadFile(ctx, client, url, paths.QwenModelPath); err != nil {
+		return fmt.Errorf("download qwen gguf: %w", err)
 	}
 	return nil
 }
